@@ -18,7 +18,7 @@ codex
 Inside Codex, enter `/model` and select `a0-qwen`, `a0-deepseek`, `a0-vision`, or a subscription model such as `GPT-6-Luna`. The picker can scroll; external models follow the built-ins. To start with a specific external model, use `codex -m a0-qwen`.
 
 ```bash
-codex-bridge edit       # $VISUAL, then $EDITOR, then vi
+codex-bridge edit       # $VISUAL, then $EDITOR, then automatic editor detection
 codex-bridge sync       # validate config and update the model picker
 # Exit and reopen Codex after sync to load the new catalog.
 codex-bridge stop
@@ -40,7 +40,7 @@ codex-bridge edit
 
 Put `~/.local/bin` on your `PATH`. The default config is `$XDG_CONFIG_HOME/codex-bridge/config.toml` on Linux (normally `~/.config/codex-bridge/config.toml`). The proxy also supports an explicit file: `codex-bridge --config /path/models.toml start`.
 
-`edit` uses `$VISUAL`, then `$EDITOR`, then `vi`. If the editor is missing or fails, it prints the full config path so you can edit the file manually. To select Micro for one invocation without setting a default, run `VISUAL= EDITOR=micro codex-bridge edit`.
+`edit` honors `$VISUAL`, then `$EDITOR`. With neither set, it searches `PATH` in this order: `micro`, `nano`, `mcedit`, `joe`, `nvim`, `vim`, the system `editor` command, then `vi`. The first available executable is used. An explicit editor setting that fails produces an error rather than silently switching editors. If no editor is found or the selected editor fails, the error includes the full config path so you can edit it manually.
 
 For the supplied example, set your provider key in the shell **before starting the proxy**:
 

@@ -34,7 +34,7 @@ func run(args []string) error {
 	fs := flag.NewFlagSet("codex-bridge", flag.ContinueOnError)
 	path := fs.String("config", filepath.Join(dir, "codex-bridge", "config.toml"), "TOML config file")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: codex-bridge [--config FILE] init|edit|sync|unsync|start|stop|status|serve\n\ninit     Create an example config\nedit     Open config in $VISUAL / $EDITOR / vi\nsync     Add models to Codex /model (restart Codex afterward)\nunsync   Restore previous Codex provider settings\nstart    Start proxy in background\nstop     Stop proxy gracefully\nstatus   Check the running proxy\nserve    Run in foreground (Ctrl-C stops)")
+		fmt.Fprintln(fs.Output(), "Usage: codex-bridge [--config FILE] init|edit|sync|unsync|start|stop|status|serve\n\ninit     Create an example config\nedit     Open config in $VISUAL / $EDITOR, or detect an installed terminal editor\nsync     Add models to Codex /model (restart Codex afterward)\nunsync   Restore previous Codex provider settings\nstart    Start proxy in background\nstop     Stop proxy gracefully\nstatus   Check the running proxy\nserve    Run in foreground (Ctrl-C stops)")
 		fs.PrintDefaults()
 	}
 	if err = fs.Parse(args); err != nil {
@@ -72,11 +72,14 @@ func run(args []string) error {
 		return nil
 	}
 	if command == "edit" {
-		cmd := exec.Command("sh", "-c", `exec ${VISUAL:-${EDITOR:-vi}} "$1"`, "sh", *path)
-		cmd.Stdin = os.Stdin
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
+		cmd, err := editorCommand(*path)
+		if err == nil {
+			cmd.Stdin = os.Stdin
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			err = cmd.Run()
+		}
+		if err != nil {
 			return fmt.Errorf("editor failed: %w\nConfig file: %s\nEdit this file manually, or set VISUAL/EDITOR to an installed editor such as micro", err, *path)
 		}
 		return nil
@@ -127,6 +130,18 @@ func run(args []string) error {
 		fs.Usage()
 		return fmt.Errorf("unknown command %q", command)
 	}
+}
+
+func editorCommand(path string) (*exec.Cmd, error) {
+	if os.Getenv("VISUAL") != "" || os.Getenv("EDITOR") != "" {
+		return exec.Command("sh", "-c", `exec ${VISUAL:-$EDITOR} "$1"`, "sh", path), nil
+	}
+	for _, name := range []string{"micro", "nano", "mcedit", "joe", "nvim", "vim", "editor", "vi"} {
+		if executable, err := exec.LookPath(name); err == nil {
+			return exec.Command(executable, path), nil
+		}
+	}
+	return nil, fmt.Errorf("no terminal editor found on PATH")
 }
 
 func withLock(path string, fn func() error) error {

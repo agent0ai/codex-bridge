@@ -67,3 +67,10 @@ PASS go test ./... including missing-editor config path regression.
 PASS actual invocation with VISUAL/EDITOR unset reports the full config path.
 PASS fresh Bash resolves the user binary; no default editor is configured.
 Micro 2.0.14 is available. Host config remains uninitialized for user testing.
+
+Automatic editor detection — 2026-10-25 UTC
+SHA-256: bc245342e7bde33a60ebaa5c2dc55361992156b1d38b622fb927edb41ab346c2
+PASS go test ./... and go vet ./...
+PASS editor priority, fallback, explicit overrides with arguments, paths with spaces, and missing-editor guidance.
+PASS real terminal launches Micro with VISUAL/EDITOR unset and exits with Ctrl-Q without changing the test config.
+Installed matching binaries in /root/.local/bin and /usr/local/bin for existing shells.

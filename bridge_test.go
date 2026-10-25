@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -31,6 +32,59 @@ func TestMissingEditorShowsConfigPath(t *testing.T) {
 	err := run([]string{"--config", path, "edit"})
 	if err == nil || !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "VISUAL/EDITOR") {
 		t.Fatalf("missing config path or editor guidance: %v", err)
+	}
+}
+
+func TestEditorSelection(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, visual, editor, want string
+		installed                  []string
+	}{
+		{name: "prefer micro", installed: []string{"vi", "nano", "micro", "editor"}, want: "micro"},
+		{name: "fall back to nano", installed: []string{"vim", "nano"}, want: "nano"},
+		{name: "vim before vi", installed: []string{"vi", "vim"}, want: "vim"},
+		{name: "system alternative", installed: []string{"vi", "editor"}, want: "editor"},
+		{name: "vi last", installed: []string{"vi"}, want: "vi"},
+		{name: "VISUAL overrides EDITOR", installed: []string{"micro", "nano", "vim"}, visual: "nano --view", editor: "vim", want: "nano\n--view"},
+		{name: "EDITOR overrides detection", installed: []string{"micro", "vim"}, editor: "vim -f", want: "vim\n-f"},
+		{name: "none installed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bin := t.TempDir()
+			if err := os.Symlink(sh, filepath.Join(bin, "sh")); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range tc.installed {
+				if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\nprintf '%s\\n' \"${0##*/}\" \"$@\"\n"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Setenv("PATH", bin)
+			t.Setenv("VISUAL", tc.visual)
+			t.Setenv("EDITOR", tc.editor)
+			path := filepath.Join(t.TempDir(), "my config.toml")
+			cmd, err := editorCommand(path)
+			if tc.want == "" {
+				if err == nil {
+					t.Fatal("expected no editor error")
+				}
+				if err := run([]string{"--config", path, "edit"}); err == nil || !strings.Contains(err.Error(), path) {
+					t.Fatalf("missing config path: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			output, err := cmd.Output()
+			if err != nil || string(output) != tc.want+"\n"+path+"\n" {
+				t.Fatalf("selected editor/arguments: %q, error: %v", output, err)
+			}
+		})
 	}
 }
 
