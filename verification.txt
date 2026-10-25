@@ -1,7 +1,7 @@
 Verification — 2026-10-25 UTC
 
 Environment: Debian trixie-slim, Codex CLI 0.164.0, Linux amd64.
-Final binary SHA-256: 285a27027b5ba65e3d03f36aecf8ecb35e7b2aea9691d6c39d962562c7db8e13
+Final binary SHA-256: 00b1d77d5f7cc794f2725cf9422db648bb5be37899d03bae3d1df68e336588fc
 
 PASS go test -race ./...
 PASS go vet ./...
@@ -17,14 +17,36 @@ PASS DeepSeek emits reasoning, executes a Python shell command, consumes its res
 
 Final live Codex app-server test (one thread, no profile changes):
 Model picker includes external and subscription models
-PASS a0-qwen: same thread 01a17343-103a-7de1-b189-3c079b3a6122, marker preserved, 1 completed tools
-PASS a0-deepseek: same thread 01a17343-103a-7de1-b189-3c079b3a6122, marker preserved, 1 completed tools
-PASS gpt-6-luna: same thread 01a17343-103a-7de1-b189-3c079b3a6122, marker preserved, 1 completed tools
-PASS a0-qwen: same thread 01a17343-103a-7de1-b189-3c079b3a6122, marker preserved, 1 completed tools
+PASS a0-qwen: same thread 01a17359-a71c-7d92-958a-1b710169df17, marker preserved, 1 completed tools
+PASS a0-deepseek: same thread 01a17359-a71c-7d92-958a-1b710169df17, marker preserved, 2 completed tools
+PASS gpt-6-luna: same thread 01a17359-a71c-7d92-958a-1b710169df17, marker preserved, 1 completed tools
+PASS a0-qwen: same thread 01a17359-a71c-7d92-958a-1b710169df17, marker preserved, 2 completed tools
 PASS model switching without profiles
 
 The final smoke test creates marker.txt via apply_patch, then each subsequent model
-reads it with a real tool. The user's ChatGPT login was used for GPT-6-Luna.
+reads it with a real tool and also reads a fresh random probe.txt value unavailable
+in conversation history. The user's ChatGPT login was used for GPT-6-Luna.
+
+Live attachment checks:
+PASS single PNG attachment
+PASS image history retained when switching to gpt-6-luna
+PASS image history retained when switching back to a0-vision
+PASS multiple PNG attachments in order
+PASS view_image tool output reaches the vision model
+PASS local text-file reference read through Codex tools
+
+Live cache measurements (raw upstream usage, four turns in one thread per model):
+Qwen:    input 74666 / 74697 / 74728 / 74759
+         cached    0 / 74640 / 74672 / 74704
+DeepSeek: input 68518 / 68544 / 68570 / 68596
+          cached    0 / 68416 / 68416 / 68480
+PASS weighted subsequent-turn cache hit ratio: Qwen 99.93%; DeepSeek 99.81%.
+PASS previous message prefix, tool definitions, and cache key unchanged per turn.
+PASS Codex cumulative usage deltas exactly equal upstream input/cached/output tokens.
+PASS final Qwen script rerun: cache key present, usage deltas exact, 99.92% warm hits.
+Original usage objects and verified per-turn deltas: cache-verification.json.
+The cache measurement uses fixed reference text and short answers without tool use.
+Model switching, tool calls, and attachments are tested separately above.
 
 Observed limits:
 - GPT-6.1-Sol returned upstream turn_rate_limit_exceeded (capacity); a minimal
@@ -32,5 +54,8 @@ Observed limits:
 - GPT-5.5 was in the bundled catalog but the account endpoint rejected it.
 - The supplied gateway's /v1/models returned 400 Missing model ID. Model IDs were
   obtained from Venice's public catalog, then tested against the supplied gateway.
-- Images, JSON schemas, and generic Responses passthrough were checked with fixtures;
-  no claim is made that every provider, model, or Responses-only feature was tested.
+- Inline file_data translation, JSON schemas, and generic Responses passthrough
+  were checked with fixtures; PDF interpretation was not tested live.
+- Cache reuse depends on the provider and workload. The gateway supplies its own
+  stable cache key. No claim is made that every provider, model, or Responses-only
+  feature was tested.

@@ -152,7 +152,7 @@ func (s *responseStream) chunk(chunk object) error {
 		return fmt.Errorf("upstream stream returned an error")
 	}
 	if u := obj(chunk["usage"]); u != nil {
-		s.response["usage"] = object{"input_tokens": u["prompt_tokens"], "output_tokens": u["completion_tokens"], "total_tokens": u["total_tokens"], "input_tokens_details": object{"cached_tokens": number(obj(u["prompt_tokens_details"])["cached_tokens"])}, "output_tokens_details": object{"reasoning_tokens": number(obj(u["completion_tokens_details"])["reasoning_tokens"])}}
+		s.response["usage"] = responsesUsage(u)
 	}
 	for _, raw := range arr(chunk["choices"]) {
 		choice := obj(raw)
@@ -211,6 +211,19 @@ func (s *responseStream) chunk(chunk object) error {
 		}
 	}
 	return nil
+}
+
+func responsesUsage(u object) object {
+	inputDetails, outputDetails := object{}, object{}
+	merge(inputDetails, obj(u["prompt_tokens_details"]))
+	merge(outputDetails, obj(u["completion_tokens_details"]))
+	if inputDetails["cached_tokens"] == nil {
+		inputDetails["cached_tokens"] = number(u["prompt_cache_hit_tokens"])
+	}
+	if outputDetails["reasoning_tokens"] == nil {
+		outputDetails["reasoning_tokens"] = 0
+	}
+	return object{"input_tokens": u["prompt_tokens"], "output_tokens": u["completion_tokens"], "total_tokens": u["total_tokens"], "input_tokens_details": inputDetails, "output_tokens_details": outputDetails}
 }
 
 func number(v any) float64 {

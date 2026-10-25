@@ -19,6 +19,8 @@ COPY --from=codex /codex-native /usr/local/bin/codex
 # Codex subscription models can use the JavaScript execution tool.
 COPY --from=codex /usr/local/bin/node /usr/local/bin/node
 COPY tests/smoke.py /opt/bridge-smoke.py
+COPY tests/attachments.py /opt/bridge-attachments.py
+COPY tests/cache.py /opt/bridge-cache.py
 ENV EDITOR=nano
 WORKDIR /work
 CMD ["sleep", "infinity"]

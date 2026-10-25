@@ -2,7 +2,9 @@
 """Live Codex model-switch test; uses paid API calls. Run inside the test container."""
 import argparse
 import json
+from pathlib import Path
 import queue
+import secrets
 import subprocess
 import tempfile
 import threading
@@ -64,6 +66,11 @@ with tempfile.TemporaryDirectory(prefix="bridge-smoke-") as cwd, tempfile.Tempor
             plan.append((args.subscription_model, "Read marker.txt using a tool, then reply with the marker I gave you."))
         plan.append(("a0-qwen", "Read marker.txt using a shell tool, then reply with the marker I gave you."))
         for model, prompt in plan:
+            probe = None
+            if (Path(cwd) / "marker.txt").exists():
+                probe = "PROBE-" + secrets.token_hex(4)
+                (Path(cwd) / "probe.txt").write_text(probe + "\n")
+                prompt += " Also read probe.txt using a tool now and include its exact contents; it has a new value unavailable in conversation history."
             notifications.clear()
             request("turn/start", {"threadId": thread_id, "model": model,
                                   "input": [{"type": "text", "text": prompt}]})
@@ -82,6 +89,9 @@ with tempfile.TemporaryDirectory(prefix="bridge-smoke-") as cwd, tempfile.Tempor
                     assert turn["status"] == "completed", turn
                     break
             assert "ORBIT-731" in text, (model, text)
+            if probe:
+                assert probe in text, (model, "fresh file value missing", text)
+            assert (Path(cwd) / "marker.txt").read_text().strip() == "ORBIT-731"
             assert tool_count > 0, (model, "no completed file or command tool")
             print(f"PASS {model}: same thread {thread_id}, marker preserved, {tool_count} completed tools", flush=True)
         print("PASS model switching without profiles", flush=True)

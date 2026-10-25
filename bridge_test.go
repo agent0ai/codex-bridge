@@ -353,3 +353,91 @@ func TestProviderURLs(t *testing.T) {
 		}
 	}
 }
+
+func TestAttachmentsInToolResultsAndInlineFiles(t *testing.T) {
+	req := decode(t, `{"input":[{"role":"user","content":[{"type":"input_file","filename":"report.pdf","file_data":"data:application/pdf;base64,JVBERi0="}]},{"type":"function_call","call_id":"c1","name":"view_image","arguments":"{}"},{"type":"function_call","call_id":"c2","name":"read","arguments":"{}"},{"type":"function_call_output","call_id":"c1","output":[{"type":"input_text","text":"Image"},{"type":"input_image","image_url":"data:image/png;base64,AA"}]},{"type":"function_call_output","call_id":"c2","output":"text"}]}`)
+	chat, _, err := toChat(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := arr(chat["messages"])
+	file := obj(obj(arr(obj(messages[0])["content"])[0])["file"])
+	if file["filename"] != "report.pdf" || file["file_data"] != "data:application/pdf;base64,JVBERi0=" {
+		t.Fatal(file)
+	}
+	if len(messages) != 5 || obj(messages[2])["role"] != "tool" || obj(messages[3])["role"] != "tool" || obj(messages[4])["role"] != "user" {
+		t.Fatal(messages)
+	}
+	for _, p := range arr(obj(messages[2])["content"]) {
+		if obj(p)["type"] != "text" {
+			t.Fatal("media leaked into Chat tool message")
+		}
+	}
+	media := arr(obj(messages[4])["content"])
+	if obj(obj(media[1])["image_url"])["url"] != "data:image/png;base64,AA" {
+		t.Fatal(media)
+	}
+}
+
+func TestCacheControlsAndPromptPrefixStayStable(t *testing.T) {
+	req := decode(t, `{"model":"alias","instructions":"unchanging instructions","prompt_cache_key":"same-thread","prompt_cache_retention":"24h","prompt_cache_options":{"mode":"explicit","ttl":"30m"},"tools":[{"type":"function","name":"read","parameters":{"type":"object"}}],"input":[{"role":"user","content":[{"type":"input_text","text":"stable context","prompt_cache_breakpoint":{"mode":"explicit"},"cache_control":{"type":"ephemeral"}}]}]}`)
+	first, _, err := toChat(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstJSON, _ := json.Marshal(first)
+	for _, key := range []string{"prompt_cache_key", "prompt_cache_retention", "prompt_cache_options"} {
+		want, _ := json.Marshal(req[key])
+		got, _ := json.Marshal(first[key])
+		if !bytes.Equal(want, got) {
+			t.Fatalf("lost %s", key)
+		}
+	}
+	for i := 0; i < 20; i++ {
+		repeated, _, err := toChat(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, _ := json.Marshal(repeated)
+		if !bytes.Equal(firstJSON, b) {
+			t.Fatal("identical input changed its upstream representation")
+		}
+	}
+	req["input"] = append(arr(req["input"]), object{"type": "message", "id": "msg_bridge_random", "role": "assistant", "content": []any{object{"type": "output_text", "text": "ACK"}}}, object{"role": "user", "content": "next turn"})
+	next, _, err := toChat(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"tools", "prompt_cache_key", "prompt_cache_retention", "prompt_cache_options"} {
+		a, _ := json.Marshal(first[key])
+		b, _ := json.Marshal(next[key])
+		if !bytes.Equal(a, b) {
+			t.Fatalf("%s changed", key)
+		}
+	}
+	prefix, _ := json.Marshal(arr(next["messages"])[:len(arr(first["messages"]))])
+	old, _ := json.Marshal(first["messages"])
+	if !bytes.Equal(prefix, old) {
+		t.Fatal("new turn mutated the cached prefix")
+	}
+	part := obj(arr(obj(arr(first["messages"])[1])["content"])[0])
+	if part["prompt_cache_breakpoint"] == nil || part["cache_control"] == nil {
+		t.Fatal("lost content cache controls")
+	}
+}
+
+func TestCacheUsageAccounting(t *testing.T) {
+	for _, tc := range []struct {
+		usage  string
+		cached float64
+	}{
+		{`{"prompt_tokens":1000,"completion_tokens":20,"total_tokens":1020,"prompt_tokens_details":{"cached_tokens":800}}`, 800},
+		{`{"prompt_tokens":1000,"completion_tokens":20,"total_tokens":1020,"prompt_cache_hit_tokens":700,"prompt_cache_miss_tokens":300}`, 700},
+		{`{"prompt_tokens":1000,"completion_tokens":20,"total_tokens":1020,"prompt_tokens_details":{"cached_tokens":0},"prompt_cache_hit_tokens":700}`, 0},
+	} {
+		got := responsesUsage(decode(t, tc.usage))
+		if number(got["input_tokens"]) != 1000 || number(obj(got["input_tokens_details"])["cached_tokens"]) != tc.cached {
+			t.Fatal(got)
+		}
+	}
+}

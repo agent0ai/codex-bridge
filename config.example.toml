@@ -26,6 +26,17 @@ reasoning_efforts = ["low", "medium", "high"]
 [models.params.venice_parameters]
 include_venice_system_prompt = false
 
+[[models]]
+name = "a0-vision"
+model = "qwen3-vl-235b-a22b"
+base_url = "https://llm.agent-zero.ai/v1"
+api = "chat"
+api_key_env = "AGENT_ZERO_API_KEY"
+context_window = 128000
+vision = true
+[models.params.venice_parameters]
+include_venice_system_prompt = false
+
 # [[models]]
 # name = "other-responses"
 # model = "provider-model-id"
