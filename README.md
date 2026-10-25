@@ -5,20 +5,26 @@ Requires Codex CLI; tested with **0.164.0**.
 
 ## Install
 
-Linux. Run as root, or prefix `install` with `sudo`.
+Linux, installed for your user. No `sudo` needed.
 
 **x86_64 / amd64**
 
 ```sh
 curl -fL https://github.com/agent0ai/codex-bridge/releases/latest/download/codex-bridge-linux-amd64 -o codex-bridge-linux-amd64 &&
-install -m 755 codex-bridge-linux-amd64 /usr/local/bin/codex-bridge
+install -Dm 755 codex-bridge-linux-amd64 "$HOME/.local/bin/codex-bridge"
 ```
 
 **ARM64 / aarch64**
 
 ```sh
 curl -fL https://github.com/agent0ai/codex-bridge/releases/latest/download/codex-bridge-linux-arm64 -o codex-bridge-linux-arm64 &&
-install -m 755 codex-bridge-linux-arm64 /usr/local/bin/codex-bridge
+install -Dm 755 codex-bridge-linux-arm64 "$HOME/.local/bin/codex-bridge"
+```
+
+Add it to PATH for this shell, and put the same line in `~/.bashrc` (Bash) or `~/.zshrc` (Zsh) for future terminals:
+
+```sh
+export PATH="$HOME/.local/bin:$PATH"
 ```
 
 ## Quick start

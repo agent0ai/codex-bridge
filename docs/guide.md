@@ -36,12 +36,12 @@ Install Codex CLI 0.164.0 and Go 1.24.4 or newer, then:
 
 ```bash
 go build -trimpath -ldflags="-s -w -X main.version=$(git describe --tags --always --dirty)" -o codex-bridge .
-mkdir -p ~/.local/bin
-install -m 755 codex-bridge ~/.local/bin/codex-bridge
+install -Dm 755 codex-bridge "$HOME/.local/bin/codex-bridge"
+export PATH="$HOME/.local/bin:$PATH"
 codex-bridge edit       # creates the initial config if missing
 ```
 
-Put `~/.local/bin` on your `PATH`. The default config is `$XDG_CONFIG_HOME/codex-bridge/config.yaml` on Linux (normally `~/.config/codex-bridge/config.yaml`). The proxy also supports an explicit file: `codex-bridge --config /path/models.yaml start`. Legacy `.toml` files remain readable when passed explicitly with `--config`. Codex's own `~/.codex/config.toml` still uses TOML.
+Put the `export PATH` line in `~/.bashrc` (Bash) or `~/.zshrc` (Zsh) for future terminals. The default config is `$XDG_CONFIG_HOME/codex-bridge/config.yaml` on Linux (normally `~/.config/codex-bridge/config.yaml`). The proxy also supports an explicit file: `codex-bridge --config /path/models.yaml start`. Legacy `.toml` files remain readable when passed explicitly with `--config`. Codex's own `~/.codex/config.toml` still uses TOML.
 
 `codex-bridge --version` prints the binary's build version without requiring a config. `status` also shows this version. Release builds embed their Git tag; builds without `-X main.version=...` report `dev`.
 
