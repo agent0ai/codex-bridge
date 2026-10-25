@@ -158,19 +158,22 @@ func printStatus(path string, c Config, configErr error) error {
 	}
 	fmt.Println("Config:", path)
 	if configErr != nil {
-		fmt.Println("Models: unavailable (invalid config)")
-		fmt.Println("Codex sync: unsynced (bridge config is invalid)")
+		fmt.Println("Models: unavailable")
+		fmt.Println("Codex sync: could not verify")
 		return configErr
 	}
 	fmt.Printf("Models: %d external\n", len(c.Models))
-	if reason := codexSyncStatus(path, c); reason != "" {
-		fmt.Println("Codex sync: unsynced (" + reason + ")")
+	reason, verifyErr := codexSyncStatus(path, c)
+	if verifyErr != nil {
+		fmt.Println("Codex sync: could not verify")
+		fmt.Println("Reason:", verifyErr)
+	} else if reason != "" {
+		fmt.Println("Codex sync: unsynced")
+		fmt.Println("Reason:", reason)
 	} else {
-		fmt.Println("Codex sync: synced (config files on disk)")
+		fmt.Println("Codex sync: synced")
 	}
 	fmt.Println("Codex config:", filepath.Join(codexDir(), "config.toml"))
-	fmt.Println("Codex daemon:", codexDaemonStatus())
-	fmt.Println(codexReloadHint)
 	if err != nil {
 		return fmt.Errorf("proxy is not running or unreachable: %w", err)
 	}

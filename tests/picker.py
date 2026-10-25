@@ -85,16 +85,25 @@ with tempfile.TemporaryDirectory(prefix="bridge-picker-") as tmp:
     state.mkdir()
     (state / "settings.json").write_text(json.dumps({"updater": {"autoUpdateEnabled": False}}))
     bridge_config = root / "bridge.yaml"
-    bridge_config.write_text("models:\n  - name: picker-test-model\n    model: offline\n"
+    bridge_config.write_text("listen: 127.0.0.1:1\nmodels:\n  - name: picker-test-model\n    model: offline\n"
                              "    api: chat\n    base_url: http://127.0.0.1:1/v1\n")
 
     def run(*command):
         return subprocess.run(command, env=env, cwd=cwd, check=True,
                               capture_output=True, text=True, timeout=120).stdout
 
+    def verify_status(expected):
+        # The proxy is intentionally stopped; this check only exercises Codex sync status.
+        result = subprocess.run([args.bridge, "--config", str(bridge_config), "status"],
+                                env=env, cwd=cwd, capture_output=True, text=True, timeout=20)
+        lines = [line for line in result.stdout.splitlines() if line.startswith("Codex sync:")]
+        assert lines == ["Codex sync: " + expected], (result.stdout, result.stderr)
+        print("PASS live status: " + expected, flush=True)
+
     try:
         run("codex", "app-server", "daemon", "start")
         run(args.bridge, "--config", str(bridge_config), "sync")
+        verify_status("unsynced")
         stale = picker(env, cwd)
         assert "Select Model and Effort" in stale and "picker-test-model" not in stale, stale
         print("PASS real TUI reproduces the stale catalog after normal sync", flush=True)
@@ -102,8 +111,15 @@ with tempfile.TemporaryDirectory(prefix="bridge-picker-") as tmp:
         assert "1. picker-test-model" in fresh, fresh
         print("PASS --no-daemon shows the external model first", flush=True)
         run(args.bridge, "--config", str(bridge_config), "sync", "--force")
+        verify_status("synced")
         restarted = picker(env, cwd)
         assert "1. picker-test-model" in restarted, restarted
         print("PASS sync --force refreshes the normal shared-server TUI picker", flush=True)
+        bridge_config.write_text(bridge_config.read_text() + "    vision: true\n")
+        run(args.bridge, "--config", str(bridge_config), "sync")
+        verify_status("unsynced")
+        run(args.bridge, "--config", str(bridge_config), "sync", "--force")
+        verify_status("synced")
     finally:
         run("codex", "app-server", "daemon", "stop")
+    verify_status("could not verify")

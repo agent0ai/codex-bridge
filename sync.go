@@ -20,7 +20,7 @@ const rootEnd = "# END codex-bridge settings\n"
 const providerBegin = "# BEGIN codex-bridge provider\n"
 const providerEnd = "# END codex-bridge provider\n"
 
-const codexReloadHint = "Load the current config now: codex --no-daemon\nFor normal codex, finish active turns, run codex app-server daemon restart, then reopen Codex.\nRestarting only the terminal does not refresh an existing shared server's model catalog."
+const codexReloadHint = "Reopen with codex --no-daemon, or restart the shared server: codex app-server daemon restart"
 
 func stripBlock(b []byte, begin, end string) ([]byte, error) {
 	i := bytes.Index(b, []byte(begin))
@@ -157,67 +157,56 @@ func sameJSON(a, b any) bool {
 }
 
 // Compare files only; Codex's shared server retains its startup catalog across TUI restarts.
-func codexSyncStatus(path string, c Config) string {
+func codexConfigStatus(path string, c Config) (string, error) {
 	dir := codexDir()
 	raw, err := os.ReadFile(filepath.Join(dir, "config.toml"))
 	if err != nil {
-		return "cannot read Codex config"
+		if os.IsNotExist(err) {
+			return "Codex config is missing", nil
+		}
+		return "", fmt.Errorf("cannot read Codex config: %w", err)
 	}
 	var config object
 	if err := toml.Unmarshal(raw, &config); err != nil {
-		return "Codex config is invalid"
+		return "Codex config is invalid", nil
 	}
 	if config["model_provider"] != "codex-bridge" {
-		return "Codex provider is not codex-bridge"
+		return "Codex provider is not codex-bridge", nil
 	}
 	catalogPath := filepath.Join(dir, "codex-bridge-models.json")
 	if config["model_catalog_json"] != catalogPath {
-		return "Codex uses a different model catalog"
+		return "Codex uses a different model catalog", nil
 	}
 	token, err := os.ReadFile(path + ".token")
+	if err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("cannot read local bridge token: %w", err)
+	}
 	if err != nil || len(token) != 64 {
-		return "local bridge token is missing or invalid"
+		return "local bridge token is missing or invalid", nil
 	}
 	if !sameJSON(obj(config["model_providers"])["codex-bridge"], providerSettings(c, string(token))) {
-		return "provider settings changed; run sync"
+		return "provider settings changed; run sync", nil
 	}
 	raw, err = os.ReadFile(catalogPath)
 	var actual object
+	if err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("cannot read model catalog: %w", err)
+	}
 	if err != nil || json.Unmarshal(raw, &actual) != nil {
-		return "model catalog is missing or invalid"
+		return "model catalog is missing or invalid", nil
 	}
 	base, err := bundledCatalog()
 	if err != nil {
-		return "cannot check installed Codex model defaults"
+		return "", fmt.Errorf("cannot check installed Codex model defaults")
 	}
 	want, err := makeCatalog(base, c)
 	if err != nil {
-		return err.Error()
+		return err.Error(), nil
 	}
 	if !sameJSON(actual, want) {
-		return "model catalog changed; run sync"
+		return "model catalog changed; run sync", nil
 	}
-	return ""
-}
-
-func codexDaemonStatus() string {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	raw, err := exec.CommandContext(ctx, "codex", "app-server", "daemon", "version").Output()
-	var result struct {
-		Status string `json:"status"`
-	}
-	if err != nil || json.Unmarshal(raw, &result) != nil {
-		return "unknown (could not inspect shared server)"
-	}
-	switch result.Status {
-	case "running":
-		return "running (in-memory model catalog not verified)"
-	case "notRunning":
-		return "not running (new sessions load the current config)"
-	default:
-		return "unknown (could not inspect shared server)"
-	}
+	return "", nil
 }
 
 func syncCodex(path string, c Config, force bool) error {
@@ -304,7 +293,7 @@ func syncCodex(path string, c Config, force bool) error {
 	if err = atomicWrite(target, next); err != nil {
 		return err
 	}
-	fmt.Printf("Synced %d external models plus %d built-in models to %s (on disk).\n", len(c.Models), len(arr(base["models"])), target)
+	fmt.Printf("Wrote %d external models plus %d built-in models to %s.\n", len(c.Models), len(arr(base["models"])), target)
 	if force {
 		fmt.Println("Restarting the shared Codex server; active work may be interrupted.")
 		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)

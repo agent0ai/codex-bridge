@@ -351,29 +351,13 @@ func TestYAMLAndLegacyConfigPreserveValues(t *testing.T) {
 	}
 }
 
-func TestCodexDaemonStatus(t *testing.T) {
-	for _, tc := range []struct{ response, want string }{
-		{`{"status":"running"}`, "running (in-memory model catalog not verified)"},
-		{`{"status":"notRunning"}`, "not running (new sessions load the current config)"},
-		{`{"status":"unexpected"}`, "unknown (could not inspect shared server)"},
-		{`invalid JSON`, "unknown (could not inspect shared server)"},
-	} {
-		t.Run(tc.response, func(t *testing.T) {
-			bin := filepath.Join(t.TempDir(), "codex")
-			script := "#!/bin/sh\n[ \"$*\" = 'app-server daemon version' ] || exit 1\nprintf '%s' '" + tc.response + "'\n"
-			if err := os.WriteFile(bin, []byte(script), 0700); err != nil {
-				t.Fatal(err)
-			}
-			t.Setenv("PATH", filepath.Dir(bin))
-			if got := codexDaemonStatus(); got != tc.want {
-				t.Fatalf("got %q, want %q", got, tc.want)
-			}
-		})
+func diskSyncReason(t *testing.T, path string, c Config) string {
+	t.Helper()
+	reason, err := codexConfigStatus(path, c)
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Setenv("PATH", t.TempDir())
-	if got := codexDaemonStatus(); got != "unknown (could not inspect shared server)" {
-		t.Fatal("missing CLI reported as a stopped daemon:", got)
-	}
+	return reason
 }
 
 func TestSyncForce(t *testing.T) {
@@ -429,7 +413,7 @@ esac
 			}
 			if mode != "invalid config" {
 				c, err := loadConfig(path)
-				if err != nil || codexSyncStatus(path, c) != "" {
+				if err != nil || diskSyncReason(t, path, c) != "" {
 					t.Fatal("sync did not leave valid settings on disk:", err)
 				}
 			}
@@ -455,7 +439,7 @@ func TestSyncIdempotentAndUnsyncPreservesUserEdits(t *testing.T) {
 	}
 	configPath := filepath.Join(dir, "bridge.yaml")
 	c := Config{Listen: "127.0.0.1:8787", Models: []Model{{Name: "custom", Model: "remote", API: "chat", ContextWindow: 32768}}}
-	if codexSyncStatus(configPath, c) == "" {
+	if diskSyncReason(t, configPath, c) == "" {
 		t.Fatal("reported synced before sync")
 	}
 	if err := syncCodex(configPath, c, false); err != nil {
@@ -469,29 +453,29 @@ func TestSyncIdempotentAndUnsyncPreservesUserEdits(t *testing.T) {
 	if !bytes.Equal(first, second) {
 		t.Fatal("sync changes config on every invocation")
 	}
-	if reason := codexSyncStatus(configPath, c); reason != "" {
+	if reason := diskSyncReason(t, configPath, c); reason != "" {
 		t.Fatal("reported unsynced after sync:", reason)
 	}
 	changed := c
 	changed.Listen = "127.0.0.1:9999"
-	if codexSyncStatus(configPath, changed) == "" {
+	if diskSyncReason(t, configPath, changed) == "" {
 		t.Fatal("missed changed listen address")
 	}
 	changed = c
 	changed.Models = append([]Model(nil), c.Models...)
 	changed.Models[0].Vision = true
-	if codexSyncStatus(configPath, changed) == "" {
+	if diskSyncReason(t, configPath, changed) == "" {
 		t.Fatal("missed changed model metadata")
 	}
 	changed.Models = nil
-	if codexSyncStatus(configPath, changed) == "" {
+	if diskSyncReason(t, configPath, changed) == "" {
 		t.Fatal("missed removed model")
 	}
 	changed = c
 	changed.Models = append([]Model(nil), c.Models...)
 	changed.Models[0].APIKey = "new-key"
 	changed.Models[0].Params = object{"temperature": 0.5}
-	if reason := codexSyncStatus(configPath, changed); reason != "" {
+	if reason := diskSyncReason(t, configPath, changed); reason != "" {
 		t.Fatal("hot-loaded settings should not require sync:", reason)
 	}
 	catalogPath := filepath.Join(dir, "codex-bridge-models.json")
@@ -499,7 +483,7 @@ func TestSyncIdempotentAndUnsyncPreservesUserEdits(t *testing.T) {
 	if err := os.WriteFile(catalogPath, []byte(`{"models":[]}`), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if codexSyncStatus(configPath, c) == "" {
+	if diskSyncReason(t, configPath, c) == "" {
 		t.Fatal("missed edited catalog")
 	}
 	if err := os.WriteFile(catalogPath, catalog, 0600); err != nil {
@@ -508,13 +492,13 @@ func TestSyncIdempotentAndUnsyncPreservesUserEdits(t *testing.T) {
 	if err := os.WriteFile(target, append(second, []byte("\n[projects.\"/new\"]\ntrust_level = 'trusted'\n")...), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if reason := codexSyncStatus(configPath, c); reason != "" {
+	if reason := diskSyncReason(t, configPath, c); reason != "" {
 		t.Fatal("unrelated Codex settings should not affect sync:", reason)
 	}
 	if err := unsyncCodex(); err != nil {
 		t.Fatal(err)
 	}
-	if codexSyncStatus(configPath, c) == "" {
+	if diskSyncReason(t, configPath, c) == "" {
 		t.Fatal("reported synced after unsync")
 	}
 	result, _ := os.ReadFile(target)

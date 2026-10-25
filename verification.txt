@@ -105,3 +105,22 @@ PASS tests/picker.py with a temporary CODEX_HOME, dummy key, and real PTY sessio
 Installed matching binaries in /root/.local/bin, /usr/local/bin, and codex-bridge-lab.
 The user's active shared server was not restarted. No inference requests were sent;
 attachment and cache tests were not repeated for this CLI-only change.
+
+Live model catalog verification — 2026-10-25 UTC
+SHA-256: 37ef8ed3b189683d0523b199c070334c873b9e87ab32cc661563c5e669f2a24c
+Status now initializes a WebSocket connection to the existing Codex Unix socket
+and queries model/list, including pagination, without starting a fresh server.
+It reports one result: synced, unsynced, or could not verify.
+PASS go test -race ./... and go vet ./...
+PASS Unix-socket tests: matching models, stale/extra models, changed capabilities,
+pagination, interleaved notifications, RPC errors, malformed replies, missing
+metadata, stopped/unreachable servers, invalid daemon metadata, and query timeout.
+PASS real isolated daemon/TUI: stale catalog -> unsynced; sync --force -> synced;
+changed image support after normal sync -> unsynced; force sync -> synced;
+stopped daemon -> could not verify.
+PASS installed host binary queries the user's running server and reports synced
+for a0-glm-5-3, with no parenthetical qualifiers or routine reload paragraphs.
+Installed matching binaries in both host bin directories and codex-bridge-lab.
+No inference requests were sent or user servers restarted. The live comparison
+covers model/list metadata; retained context limits, credentials, session-specific
+overrides, and upstream inference access are not exposed/verified by that query.

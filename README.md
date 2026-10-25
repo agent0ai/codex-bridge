@@ -2,7 +2,7 @@
 
 A small Go proxy that puts OpenAI-compatible Chat Completions and Responses models in Codex CLI's `/model` picker, alongside your ChatGPT subscription. Switch models within a conversation; no profiles or patched Codex required.
 
-Proof of concept tested with **Codex CLI 0.164.0** on Debian Linux. Two small parser dependencies (YAML for bridge settings, TOML for Codex settings), no database, no JavaScript runtime for the proxy. The running proxy used about 15 MiB RSS during the initial live tests. Linux and macOS process APIs are used; Windows support is not implemented.
+Proof of concept tested with **Codex CLI 0.164.0** on Debian Linux. YAML and TOML parsers plus a WebSocket client for checking Codex's loaded models; no database or JavaScript runtime for the proxy. The running proxy used about 15 MiB RSS during the initial live tests. Linux and macOS process APIs are used; Windows support is not implemented.
 
 ## Ready-to-use test container
 
@@ -104,18 +104,16 @@ Changing `context_window` does not enlarge the provider's real context limit. Se
 
 Codex 0.164.0 can reconnect new terminals to an existing shared background server. That server keeps its startup model catalog, so **closing and reopening the terminal does not refresh it**. Use `codex --no-daemon` to load the synced files immediately, or run `codex-bridge sync --force` and reopen Codex. The force option restarts the shared server through Codex's own daemon command, which may interrupt active work and takes time to shut down gracefully. Normal `sync` never restarts it. If restarting fails, the command exits with an error and clearly reports that the files were still synced.
 
-`status` compares the current provider, local token, listen address, and complete model catalog against the expected settings. It reports `synced` or `unsynced` with a reason and labels this as an on-disk check. It also reports whether the shared daemon is running; its in-memory catalog is not verified. Changing API keys or upstream parameters does not require sync; changing model metadata does. The check is read-only and does not inspect separate profiles or command-line overrides.
+`status` verifies the provider, local token, listen address, and model catalog files, then connects to the **running** Codex server's Unix socket and queries its [`model/list` API](https://learn.chatgpt.com/docs/app-server#list-models-modellist). It checks external model names, order, visibility, descriptions, reasoning options, and input modalities, including removed models still loaded by the server. It reports one result: `synced`, `unsynced`, or `could not verify`. A stopped/unreachable server, failed query, or malformed response produces `could not verify`; a confirmed difference produces `unsynced`. Reasons appear only when verification fails or finds a mismatch.
+
+The query is read-only: it does not start/restart Codex or send inference requests. It follows pagination and has a ten-second deadline for the server check. Changing API keys or upstream parameters does not require sync; changing model metadata does. The API exposes picker metadata, not all internal settings such as retained context limits or provider credentials. Separate profiles, command-line overrides, and upstream model access are outside this check.
 
 ```text
 Running at http://127.0.0.1:8787
 Config: /root/.config/codex-bridge/config.yaml
 Models: 1 external
-Codex sync: synced (config files on disk)
+Codex sync: synced
 Codex config: /root/.codex/config.toml
-Codex daemon: running (in-memory model catalog not verified)
-Load the current config now: codex --no-daemon
-For normal codex, finish active turns, run codex app-server daemon restart, then reopen Codex.
-Restarting only the terminal does not refresh an existing shared server's model catalog.
 ```
 
 All selected models go through the proxy while synced, so keep it running. To return to your original setup:
@@ -204,7 +202,7 @@ docker exec codex-bridge-lab python3 /opt/bridge-cache.py --model a0-qwen --repo
 docker exec codex-bridge-lab python3 /opt/bridge-cache.py --model a0-deepseek --report /tmp/cache-deepseek.json
 ```
 
-The picker regression requires a complete packaged Codex 0.164.0 installation for daemon management; pass `--codex /path/to/package/bin/codex` if your default CLI is a standalone binary. It reproduces a stale catalog after normal sync, checks `--no-daemon`, then checks that `sync --force` makes the external model appear first in a normal terminal session. It uses a temporary `CODEX_HOME` and leaves existing servers alone.
+The picker regression requires a complete packaged Codex 0.164.0 installation for daemon management; pass `--codex /path/to/package/bin/codex` if your default CLI is a standalone binary. It reproduces a stale catalog after normal sync, checks `--no-daemon`, then checks that `sync --force` makes the external model appear first in a normal terminal session. It also checks live status before/after restart, stale image support for an existing alias, and the stopped-server result. It uses a temporary `CODEX_HOME` and leaves existing servers alone.
 
 Unit tests cover translation, fragmented parallel tool calls, custom tools, reasoning, attachments, cache controls and accounting, stable prompt prefixes, JSON schemas, truncated streams, credential separation, native Responses forwarding, URL handling, validation, sync/unsync preservation, force restart, and restart failures. Live tests cover Qwen file edits and Python tests, DeepSeek reasoning and shell tools, image and file attachments, cache reuse, the interactive picker, and switching external/subscription models within one thread. See [verification.txt](verification.txt) for the recorded results.
 
