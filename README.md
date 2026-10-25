@@ -38,30 +38,36 @@ Install Codex CLI 0.164.0 and Go 1.24.4 or newer, then:
 go build -trimpath -ldflags='-s -w' -o codex-bridge .
 mkdir -p ~/.local/bin
 install -m 755 codex-bridge ~/.local/bin/codex-bridge
-codex-bridge init
-codex-bridge edit
+codex-bridge edit       # creates the initial config if missing
 ```
 
 Put `~/.local/bin` on your `PATH`. The default config is `$XDG_CONFIG_HOME/codex-bridge/config.yaml` on Linux (normally `~/.config/codex-bridge/config.yaml`). The proxy also supports an explicit file: `codex-bridge --config /path/models.yaml start`. Legacy `.toml` files remain readable when passed explicitly with `--config`. Codex's own `~/.codex/config.toml` still uses TOML.
 
+`init` creates the example config; `edit` automatically does this when the file is missing, then opens it. Existing configs are preserved, including invalid configs that need fixing. `start` and `sync` require an existing config and never create one automatically.
+
 `edit` honors `$VISUAL`, then `$EDITOR`. With neither set, it searches `PATH` in this order: `micro`, `nano`, `mcedit`, `joe`, `nvim`, `vim`, the system `editor` command, then `vi`. The first available executable is used. An explicit editor setting that fails produces an error rather than silently switching editors. If no editor is found or the selected editor fails, the error includes the full config path so you can edit it manually.
 
-For the supplied example, set your provider key in the shell **before starting the proxy**:
+The initial config contains `a0-glm-5-3` with the tested reasoning parameter fix. Replace `api_key: "..."` with your key. To use an environment variable instead, comment out `api_key`, uncomment `api_key_env: AGENT_ZERO_API_KEY`, and export that variable **before starting the proxy**:
 
 ```bash
 read -rs -p 'Provider API key: ' AGENT_ZERO_API_KEY; echo
 export AGENT_ZERO_API_KEY
+```
+
+Then start and sync:
+
+```bash
 codex-bridge start
 codex-bridge sync
 codex login             # only if you have not already logged in
 codex --no-daemon
 ```
 
-The bridge uses Codex's existing subscription authentication and refresh logic. It never modifies `auth.json` or logs credentials. A subscription login is required for the normal mixed subscription/external setup. For external-only use without signing in, launch `codex -c model_providers.codex-bridge.requires_openai_auth=false -m a0-qwen`.
+The bridge uses Codex's existing subscription authentication and refresh logic. It never modifies `auth.json` or logs credentials. A subscription login is required for the normal mixed subscription/external setup. For external-only use without signing in, launch `codex -c model_providers.codex-bridge.requires_openai_auth=false -m a0-glm-5-3`.
 
 ## Config
 
-See [config.example.yaml](config.example.yaml) for the three tested models. A model entry looks like:
+See [config.example.yaml](config.example.yaml) for the initial GLM config. The existing test container keeps its separate three-model config for the Qwen, DeepSeek, and vision tests. A model entry looks like:
 
 ```yaml
 listen: 127.0.0.1:8787
@@ -91,7 +97,7 @@ Changing `context_window` does not enlarge the provider's real context limit. Se
 | Command | Effect |
 | --- | --- |
 | `init` | Create the example config with private permissions; never overwrite an existing file. |
-| `edit` | Open the config with your terminal editor. |
+| `edit` | Create the example config if missing, then open it with your terminal editor. |
 | `sync` | Validate config, generate a version-matched model catalog, and select the local bridge provider. |
 | `sync --force` | Sync, then immediately invoke `codex app-server daemon restart`; active work may be interrupted. |
 | `start` | Start one background proxy; repeated starts reuse the running instance. |

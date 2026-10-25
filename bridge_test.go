@@ -36,6 +36,83 @@ func TestMissingEditorShowsConfigPath(t *testing.T) {
 	}
 }
 
+func TestInitAndEditCreateConfig(t *testing.T) {
+	for _, extension := range []string{".yaml", ".toml"} {
+		for _, command := range []string{"init", "edit"} {
+			t.Run(command+extension, func(t *testing.T) {
+				dir := t.TempDir()
+				path := filepath.Join(dir, "new directory", "config"+extension)
+				editor := filepath.Join(dir, "editor")
+				if err := os.WriteFile(editor, []byte("#!/bin/sh\n[ -s \"$1\" ] || exit 42\nprintf '\\n# edited\\n' >> \"$1\"\n"), 0700); err != nil {
+					t.Fatal(err)
+				}
+				t.Setenv("VISUAL", "")
+				t.Setenv("EDITOR", editor)
+				if err := run([]string{"--config", path, command}); err != nil {
+					t.Fatal(err)
+				}
+				c, err := loadConfig(path)
+				if err != nil || len(c.Models) != 1 || c.Models[0].Name != "a0-glm-5-3" || c.Models[0].Model != "e2ee-glm-5-3-p" || c.Models[0].APIKey != "..." || c.Models[0].APIKeyEnv != "" || !sameJSON(c.Models[0].DropParams, []string{"reasoning_effort"}) {
+					t.Fatal("wrong initial config:", err)
+				}
+				info, err := os.Stat(path)
+				if err != nil || info.Mode().Perm() != 0600 {
+					t.Fatal("config permissions are not private:", err)
+				}
+				before, _ := os.ReadFile(path)
+				if command == "edit" && !bytes.Contains(before, []byte("# edited")) {
+					t.Fatal("editor did not open the initialized config")
+				}
+				if err := run([]string{"--config", path, "init"}); !os.IsExist(err) {
+					t.Fatal("init did not reject an existing config:", err)
+				}
+				after, _ := os.ReadFile(path)
+				if !bytes.Equal(before, after) {
+					t.Fatal("init overwrote an existing config")
+				}
+				if err := run([]string{"--config", path, "edit"}); err != nil {
+					t.Fatal(err)
+				}
+				after, _ = os.ReadFile(path)
+				if !bytes.Equal(after, append(before, []byte("\n# edited\n")...)) {
+					t.Fatal("edit replaced existing config contents")
+				}
+			})
+		}
+	}
+}
+
+func TestExampleEnvironmentKeyAlternative(t *testing.T) {
+	data := bytes.Replace(example, []byte(`api_key: "..."`), []byte(`# api_key: "..."`), 1)
+	data = bytes.Replace(data, []byte("# api_key_env: AGENT_ZERO_API_KEY"), []byte("api_key_env: AGENT_ZERO_API_KEY"), 1)
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AGENT_ZERO_API_KEY", "test-environment-key")
+	c, err := loadConfig(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key, err := c.Models[0].key(); err != nil || key != "test-environment-key" || c.Models[0].APIKey != "" {
+		t.Fatal("commented alternative does not load the environment key:", err)
+	}
+}
+
+func TestStartAndSyncRequireInitializedConfig(t *testing.T) {
+	for _, command := range []string{"start", "sync"} {
+		t.Run(command, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "uninitialized")
+			if err := run([]string{"--config", filepath.Join(dir, "config.yaml"), command}); !os.IsNotExist(err) {
+				t.Fatal("missing config was not rejected:", err)
+			}
+			if _, err := os.Stat(dir); !os.IsNotExist(err) {
+				t.Fatal("command created files before initialization:", err)
+			}
+		})
+	}
+}
+
 func TestEditorSelection(t *testing.T) {
 	sh, err := exec.LookPath("sh")
 	if err != nil {
@@ -346,7 +423,7 @@ func TestYAMLAndLegacyConfigPreserveValues(t *testing.T) {
 	if err != nil || !sameJSON(got, want) {
 		t.Fatalf("migration changed config values: %v", err)
 	}
-	if c, err := loadConfig("config.example.yaml"); err != nil || len(c.Models) != 3 {
+	if c, err := loadConfig("config.example.yaml"); err != nil || len(c.Models) != 1 || c.Models[0].Name != "a0-glm-5-3" || c.Models[0].APIKey != "..." {
 		t.Fatalf("example config invalid: %v", err)
 	}
 }

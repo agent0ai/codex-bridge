@@ -124,3 +124,16 @@ Installed matching binaries in both host bin directories and codex-bridge-lab.
 No inference requests were sent or user servers restarted. The live comparison
 covers model/list metadata; retained context limits, credentials, session-specific
 overrides, and upstream inference access are not exposed/verified by that query.
+
+Default GLM config and automatic initialization — 2026-10-25 UTC
+PASS example matches the current user config except for api_key replaced by "...";
+api_key_env is supplied as a commented alternative. Existing private config preserved.
+PASS go test -race ./... and go vet ./...
+PASS init/edit create valid private configs, open the editor after initialization,
+refuse init overwrite, preserve existing edits, and support explicit legacy TOML paths.
+PASS uncommenting api_key_env and commenting api_key loads the environment key.
+PASS start/sync reject a missing config without creating config directories or files.
+PASS installed binary smoke test with a fresh path and an editor that requires an
+existing nonempty config before opening it.
+Installed in both host bin directories and codex-bridge-lab. No live API requests
+were repeated; the user's config/key and the lab's three-model config were preserved.

@@ -1,44 +1,15 @@
-# Use an API base URL (including /v1) or a complete API endpoint URL.
 listen: 127.0.0.1:8787
 
 models:
-  - name: a0-qwen
-    model: qwen3-coder-480b-a35b-instruct-turbo
+  - name: a0-glm-5-3
+    model: e2ee-glm-5-3-p
     base_url: https://llm.agent-zero.ai/v1
     api: chat
-    api_key_env: AGENT_ZERO_API_KEY
-    # api_key: "..."  # Alternative to api_key_env; use only one.
-    context_window: 262144
-    # drop_params: [reasoning_effort]
-    params:
-      temperature: 0.2
-      venice_parameters:
-        include_venice_system_prompt: false
-
-  - name: a0-deepseek
-    model: deepseek-v3.2
-    base_url: https://llm.agent-zero.ai/v1
-    api: chat
-    api_key_env: AGENT_ZERO_API_KEY
-    context_window: 160000
-    reasoning_efforts: [low, medium, high]
+    context_window: 240000
+    # Replace the key below, or comment it out and uncomment api_key_env.
+    api_key: "..."
+    # api_key_env: AGENT_ZERO_API_KEY
+    drop_params: [reasoning_effort]
     params:
       venice_parameters:
         include_venice_system_prompt: false
-
-  - name: a0-vision
-    model: qwen3-vl-235b-a22b
-    base_url: https://llm.agent-zero.ai/v1
-    api: chat
-    api_key_env: AGENT_ZERO_API_KEY
-    context_window: 128000
-    vision: true
-    params:
-      venice_parameters:
-        include_venice_system_prompt: false
-
-  # - name: other-responses
-  #   model: provider-model-id
-  #   base_url: https://example.com/v1
-  #   api: responses
-  #   api_key_env: OTHER_API_KEY

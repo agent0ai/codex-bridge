@@ -39,6 +39,38 @@ type Model struct {
 	ReasoningEfforts []string `toml:"reasoning_efforts" yaml:"reasoning_efforts,omitempty"`
 }
 
+func initConfig(path string) error {
+	data := example
+	if strings.EqualFold(filepath.Ext(path), ".toml") {
+		var config object
+		if err := yaml.Unmarshal(data, &config); err != nil {
+			return err
+		}
+		var err error
+		data, err = toml.Marshal(config)
+		if err != nil {
+			return err
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(data)
+	closeErr := f.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	fmt.Println(path)
+	return nil
+}
+
 func loadConfig(path string) (Config, error) {
 	c := Config{Listen: "127.0.0.1:8787"}
 	b, err := os.ReadFile(path)

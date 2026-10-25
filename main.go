@@ -35,7 +35,7 @@ func run(args []string) error {
 	path := fs.String("config", filepath.Join(dir, "codex-bridge", "config.yaml"), "YAML config file")
 	force := fs.Bool("force", false, "with sync, restart the shared Codex server immediately (may interrupt active work)")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: codex-bridge [--config FILE] init|edit|sync|unsync|start|stop|status|serve\n\ninit     Create an example config\nedit     Open config in $VISUAL / $EDITOR, or detect an installed terminal editor\nsync     Write Codex model settings and show how to reload them\nunsync   Restore previous Codex provider settings\nstart    Start proxy in background\nstop     Stop proxy gracefully\nstatus   Show proxy health, model count, and Codex sync status\nserve    Run in foreground (Ctrl-C stops)")
+		fmt.Fprintln(fs.Output(), "Usage: codex-bridge [--config FILE] init|edit|sync|unsync|start|stop|status|serve\n\ninit     Create an example config\nedit     Create config if missing, then open $VISUAL / $EDITOR or a detected editor\nsync     Write Codex model settings and show how to reload them\nunsync   Restore previous Codex provider settings\nstart    Start proxy in background\nstop     Stop proxy gracefully\nstatus   Show proxy health, model count, and Codex sync status\nserve    Run in foreground (Ctrl-C stops)")
 		fs.PrintDefaults()
 	}
 	if err = fs.Parse(args); err != nil {
@@ -66,25 +66,16 @@ func run(args []string) error {
 		return err
 	}
 	if command == "init" {
-		if err = os.MkdirAll(filepath.Dir(*path), 0700); err != nil {
-			return err
-		}
-		f, e := os.OpenFile(*path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
-		if e != nil {
-			return e
-		}
-		_, e = f.Write(example)
-		cerr := f.Close()
-		if e != nil {
-			return e
-		}
-		if cerr != nil {
-			return cerr
-		}
-		fmt.Println(*path)
-		return nil
+		return initConfig(*path)
 	}
 	if command == "edit" {
+		if _, err := os.Lstat(*path); os.IsNotExist(err) {
+			if err := initConfig(*path); err != nil && !os.IsExist(err) {
+				return err
+			}
+		} else if err != nil {
+			return err
+		}
 		cmd, err := editorCommand(*path)
 		if err == nil {
 			cmd.Stdin = os.Stdin
