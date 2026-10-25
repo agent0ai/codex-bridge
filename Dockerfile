@@ -2,7 +2,7 @@ FROM golang:1.24-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
-COPY *.go config.example.toml ./
+COPY *.go config.example.yaml ./
 RUN CGO_ENABLED=0 go test ./... && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /codex-bridge .
 
 FROM node:22-bookworm-slim AS codex
@@ -12,7 +12,7 @@ RUN npm install -g @openai/codex@${CODEX_VERSION} && \
     test -x /codex-native
 
 FROM debian:trixie-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git nano python3 ripgrep && \
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates git micro python3 python3-yaml ripgrep && \
     rm -rf /var/lib/apt/lists/*
 COPY --from=build /codex-bridge /usr/local/bin/codex-bridge
 COPY --from=codex /codex-native /usr/local/bin/codex
@@ -21,6 +21,5 @@ COPY --from=codex /usr/local/bin/node /usr/local/bin/node
 COPY tests/smoke.py /opt/bridge-smoke.py
 COPY tests/attachments.py /opt/bridge-attachments.py
 COPY tests/cache.py /opt/bridge-cache.py
-ENV EDITOR=nano
 WORKDIR /work
 CMD ["sleep", "infinity"]

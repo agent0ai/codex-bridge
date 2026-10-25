@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/pelletier/go-toml/v2"
+	"go.yaml.in/yaml/v3"
 )
 
 func decode(t *testing.T, s string) object {
@@ -218,18 +219,18 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestRoutesNeverLeakSubscriptionCredentials(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "config.toml")
-	config := `listen = "127.0.0.1:8787"
-[[models]]
-name = "custom"
-model = "remote-id"
-base_url = "https://provider.example/v1"
-api = "chat"
-api_key = "provider-secret"
-[models.params]
-temperature = 0.25
-[models.params.vendor]
-thinking = false
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	config := `listen: 127.0.0.1:8787
+models:
+  - name: custom
+    model: remote-id
+    base_url: https://provider.example/v1
+    api: chat
+    api_key: provider-secret
+    params:
+      temperature: 0.25
+      vendor:
+        thinking: false
 `
 	if err := os.WriteFile(path, []byte(config), 0600); err != nil {
 		t.Fatal(err)
@@ -304,20 +305,49 @@ func TestConfigEditPreservesUnrelatedSettings(t *testing.T) {
 }
 
 func TestConfigValidation(t *testing.T) {
-	for _, contents := range []string{`listen="0.0.0.0:8787"`, `listen="localhost:8787"`, `unknown=true`, `[[models]]
-name="x"
-base_url="https://user:pass@example.com"
-api="chat"`, `[[models]]
-name="x"
-base_url="https://example.com/v1"
-api="chat"
-[models.params]
-stream=false`} {
+	for _, contents := range []string{
+		`listen: 0.0.0.0:8787`, `listen: localhost:8787`, `unknown: true`,
+		`models: [{name: x, base_url: "https://user:pass@example.com", api: chat}]`,
+		`models: [{name: x, base_url: "https://example.com/v1", api: chat, params: {stream: false}}]`,
+		`models: [{name: x, base_url: "https://example.com/v1", api: chat, typo: true}]`,
+		"listen: 127.0.0.1:8787\nlisten: 127.0.0.1:8788\n",
+		"listen: 127.0.0.1:8787\n---\nmodels: []\n",
+		`models: [{name: x, base_url: "https://example.com/v1", api: chat, params: {vendor: {1: invalid}}}]`,
+		`models: [{name: x, base_url: "https://example.com/v1", api: chat, params: {temperature: .nan}}]`,
+	} {
 		p := filepath.Join(t.TempDir(), "config")
 		_ = os.WriteFile(p, []byte(contents), 0600)
 		if _, err := loadConfig(p); err == nil {
 			t.Fatalf("accepted %s", contents)
 		}
+	}
+}
+
+func TestYAMLAndLegacyConfigPreserveValues(t *testing.T) {
+	dir := t.TempDir()
+	legacy := filepath.Join(dir, "config.toml")
+	data := "listen='127.0.0.1:8787'\n[[models]]\nname='custom'\napi='chat'\nbase_url='https://example.com/v1'\napi_key='private-key'\n[models.params]\ntemperature=0.2\nlabels=['on','off']\n[models.params.vendor]\nthinking=false\n"
+	if err := os.WriteFile(legacy, []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	want, err := loadConfig(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := yaml.Marshal(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(path, b, 0600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := loadConfig(path)
+	if err != nil || !sameJSON(got, want) {
+		t.Fatalf("migration changed config values: %v", err)
+	}
+	if c, err := loadConfig("config.example.yaml"); err != nil || len(c.Models) != 3 {
+		t.Fatalf("example config invalid: %v", err)
 	}
 }
 
@@ -334,8 +364,11 @@ func TestSyncIdempotentAndUnsyncPreservesUserEdits(t *testing.T) {
 	if err := os.WriteFile(target, []byte(original), 0600); err != nil {
 		t.Fatal(err)
 	}
-	configPath := filepath.Join(dir, "bridge.toml")
+	configPath := filepath.Join(dir, "bridge.yaml")
 	c := Config{Listen: "127.0.0.1:8787", Models: []Model{{Name: "custom", Model: "remote", API: "chat", ContextWindow: 32768}}}
+	if codexSyncStatus(configPath, c) == "" {
+		t.Fatal("reported synced before sync")
+	}
 	if err := syncCodex(configPath, c); err != nil {
 		t.Fatal(err)
 	}
@@ -347,11 +380,53 @@ func TestSyncIdempotentAndUnsyncPreservesUserEdits(t *testing.T) {
 	if !bytes.Equal(first, second) {
 		t.Fatal("sync changes config on every invocation")
 	}
+	if reason := codexSyncStatus(configPath, c); reason != "" {
+		t.Fatal("reported unsynced after sync:", reason)
+	}
+	changed := c
+	changed.Listen = "127.0.0.1:9999"
+	if codexSyncStatus(configPath, changed) == "" {
+		t.Fatal("missed changed listen address")
+	}
+	changed = c
+	changed.Models = append([]Model(nil), c.Models...)
+	changed.Models[0].Vision = true
+	if codexSyncStatus(configPath, changed) == "" {
+		t.Fatal("missed changed model metadata")
+	}
+	changed.Models = nil
+	if codexSyncStatus(configPath, changed) == "" {
+		t.Fatal("missed removed model")
+	}
+	changed = c
+	changed.Models = append([]Model(nil), c.Models...)
+	changed.Models[0].APIKey = "new-key"
+	changed.Models[0].Params = object{"temperature": 0.5}
+	if reason := codexSyncStatus(configPath, changed); reason != "" {
+		t.Fatal("hot-loaded settings should not require sync:", reason)
+	}
+	catalogPath := filepath.Join(dir, "codex-bridge-models.json")
+	catalog, _ := os.ReadFile(catalogPath)
+	if err := os.WriteFile(catalogPath, []byte(`{"models":[]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if codexSyncStatus(configPath, c) == "" {
+		t.Fatal("missed edited catalog")
+	}
+	if err := os.WriteFile(catalogPath, catalog, 0600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(target, append(second, []byte("\n[projects.\"/new\"]\ntrust_level = 'trusted'\n")...), 0600); err != nil {
 		t.Fatal(err)
 	}
+	if reason := codexSyncStatus(configPath, c); reason != "" {
+		t.Fatal("unrelated Codex settings should not affect sync:", reason)
+	}
 	if err := unsyncCodex(); err != nil {
 		t.Fatal(err)
+	}
+	if codexSyncStatus(configPath, c) == "" {
+		t.Fatal("reported synced after unsync")
 	}
 	result, _ := os.ReadFile(target)
 	var parsed object
@@ -360,6 +435,19 @@ func TestSyncIdempotentAndUnsyncPreservesUserEdits(t *testing.T) {
 	}
 	if parsed["model_provider"] != "prior" || obj(obj(parsed["projects"])["/new"])["trust_level"] != "trusted" || !bytes.Contains(result, []byte("# keep this comment")) {
 		t.Fatal(string(result))
+	}
+}
+
+func TestExternalModelsSortBeforeBuiltins(t *testing.T) {
+	base := object{"models": []any{object{"slug": "builtin", "priority": -10}}}
+	c := Config{Models: []Model{{Name: "first"}, {Name: "second"}}}
+	catalog, err := makeCatalog(base, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	models := arr(catalog["models"])
+	if number(obj(models[1])["priority"]) >= number(obj(models[2])["priority"]) || number(obj(models[2])["priority"]) >= number(obj(models[0])["priority"]) {
+		t.Fatal("external models are not first in config order")
 	}
 }
 

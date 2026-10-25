@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/url"
 	"os"
@@ -13,27 +15,28 @@ import (
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
+	"go.yaml.in/yaml/v3"
 )
 
 type object = map[string]any
 
 type Config struct {
-	Listen string  `toml:"listen"`
-	Models []Model `toml:"models"`
+	Listen string  `toml:"listen" yaml:"listen"`
+	Models []Model `toml:"models" yaml:"models"`
 }
 
 type Model struct {
-	Name             string   `toml:"name"`
-	Model            string   `toml:"model"`
-	BaseURL          string   `toml:"base_url"`
-	API              string   `toml:"api"`
-	APIKey           string   `toml:"api_key"`
-	APIKeyEnv        string   `toml:"api_key_env"`
-	Params           object   `toml:"params"`
-	DropParams       []string `toml:"drop_params"`
-	ContextWindow    int      `toml:"context_window"`
-	Vision           bool     `toml:"vision"`
-	ReasoningEfforts []string `toml:"reasoning_efforts"`
+	Name             string   `toml:"name" yaml:"name"`
+	Model            string   `toml:"model" yaml:"model,omitempty"`
+	BaseURL          string   `toml:"base_url" yaml:"base_url"`
+	API              string   `toml:"api" yaml:"api"`
+	APIKey           string   `toml:"api_key" yaml:"api_key,omitempty"`
+	APIKeyEnv        string   `toml:"api_key_env" yaml:"api_key_env,omitempty"`
+	Params           object   `toml:"params" yaml:"params,omitempty"`
+	DropParams       []string `toml:"drop_params" yaml:"drop_params,omitempty"`
+	ContextWindow    int      `toml:"context_window" yaml:"context_window,omitempty"`
+	Vision           bool     `toml:"vision" yaml:"vision,omitempty"`
+	ReasoningEfforts []string `toml:"reasoning_efforts" yaml:"reasoning_efforts,omitempty"`
 }
 
 func loadConfig(path string) (Config, error) {
@@ -42,7 +45,20 @@ func loadConfig(path string) (Config, error) {
 	if err != nil {
 		return c, err
 	}
-	if err = toml.NewDecoder(bytes.NewReader(b)).DisallowUnknownFields().Decode(&c); err != nil {
+	if strings.EqualFold(filepath.Ext(path), ".toml") {
+		err = toml.NewDecoder(bytes.NewReader(b)).DisallowUnknownFields().Decode(&c)
+	} else {
+		decoder := yaml.NewDecoder(bytes.NewReader(b))
+		decoder.KnownFields(true)
+		err = decoder.Decode(&c)
+		if err == nil {
+			var extra any
+			if next := decoder.Decode(&extra); next != io.EOF {
+				err = fmt.Errorf("expected one YAML document")
+			}
+		}
+	}
+	if err != nil {
 		return c, fmt.Errorf("invalid config: %w", err)
 	}
 	if !validListen(c.Listen) {
@@ -68,6 +84,9 @@ func loadConfig(path string) (Config, error) {
 		m.BaseURL = strings.TrimRight(m.BaseURL, "/")
 		if m.APIKey != "" && m.APIKeyEnv != "" {
 			return c, fmt.Errorf("model %s: choose api_key or api_key_env", m.Name)
+		}
+		if _, err := json.Marshal(m.Params); err != nil {
+			return c, fmt.Errorf("model %s: params must contain JSON-compatible values and string keys", m.Name)
 		}
 		if m.ContextWindow == 0 {
 			m.ContextWindow = 32768

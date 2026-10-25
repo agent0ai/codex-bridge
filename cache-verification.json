@@ -300,5 +300,148 @@
       "subsequent_turns_weighted_hit_ratio": 0.998065237470225,
       "thread_id": "01a17352-94f2-7e81-ba48-913847f844a3"
     }
-  ]
+  ],
+  "yaml_verification": {
+    "model": "a0-qwen",
+    "turns": [
+      {
+        "turn": 1,
+        "requests": [
+          {
+            "input_tokens": 74648,
+            "cached_input_tokens": 0,
+            "uncached_input_tokens": 74648,
+            "hit_ratio": 0.0,
+            "upstream_usage": {
+              "prompt_tokens": 74648,
+              "completion_tokens": 4,
+              "total_tokens": 74652,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              }
+            }
+          }
+        ],
+        "codex_usage": {
+          "input_tokens": 74648,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 4,
+          "reasoning_output_tokens": 0
+        },
+        "codex_usage_delta": {
+          "input_tokens": 74648,
+          "cached_input_tokens": 0,
+          "output_tokens": 4
+        }
+      },
+      {
+        "turn": 2,
+        "requests": [
+          {
+            "input_tokens": 74679,
+            "cached_input_tokens": 0,
+            "uncached_input_tokens": 74679,
+            "hit_ratio": 0.0,
+            "upstream_usage": {
+              "prompt_tokens": 74679,
+              "completion_tokens": 4,
+              "total_tokens": 74683,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              }
+            },
+            "cache_key_stable": true,
+            "tools_stable": true,
+            "prior_messages_unchanged": true
+          }
+        ],
+        "codex_usage": {
+          "input_tokens": 149327,
+          "cached_input_tokens": 0,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 8,
+          "reasoning_output_tokens": 0
+        },
+        "codex_usage_delta": {
+          "input_tokens": 74679,
+          "cached_input_tokens": 0,
+          "output_tokens": 4
+        }
+      },
+      {
+        "turn": 3,
+        "requests": [
+          {
+            "input_tokens": 74710,
+            "cached_input_tokens": 26864,
+            "uncached_input_tokens": 47846,
+            "hit_ratio": 0.35957703118725737,
+            "upstream_usage": {
+              "prompt_tokens": 74710,
+              "completion_tokens": 4,
+              "total_tokens": 74714,
+              "prompt_tokens_details": {
+                "cached_tokens": 26864
+              },
+              "cache_read_input_tokens": 26864
+            },
+            "cache_key_stable": true,
+            "tools_stable": true,
+            "prior_messages_unchanged": true
+          }
+        ],
+        "codex_usage": {
+          "input_tokens": 224037,
+          "cached_input_tokens": 26864,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 12,
+          "reasoning_output_tokens": 0
+        },
+        "codex_usage_delta": {
+          "input_tokens": 74710,
+          "cached_input_tokens": 26864,
+          "output_tokens": 4
+        }
+      },
+      {
+        "turn": 4,
+        "requests": [
+          {
+            "input_tokens": 74741,
+            "cached_input_tokens": 54448,
+            "uncached_input_tokens": 20293,
+            "hit_ratio": 0.7284890488486908,
+            "upstream_usage": {
+              "prompt_tokens": 74741,
+              "completion_tokens": 4,
+              "total_tokens": 74745,
+              "prompt_tokens_details": {
+                "cached_tokens": 54448
+              },
+              "cache_read_input_tokens": 54448
+            },
+            "cache_key_stable": true,
+            "tools_stable": true,
+            "prior_messages_unchanged": true
+          }
+        ],
+        "codex_usage": {
+          "input_tokens": 298778,
+          "cached_input_tokens": 81312,
+          "cache_write_input_tokens": 0,
+          "output_tokens": 16,
+          "reasoning_output_tokens": 0
+        },
+        "codex_usage_delta": {
+          "input_tokens": 74741,
+          "cached_input_tokens": 54448,
+          "output_tokens": 4
+        }
+      }
+    ],
+    "subsequent_turns_weighted_hit_ratio": 0.36278945254985945,
+    "thread_id": "01a17392-6996-7a03-afcb-068f49af6b03",
+    "purpose": "YAML configuration verification"
+  }
 }

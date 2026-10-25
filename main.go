@@ -16,7 +16,7 @@ import (
 	"time"
 )
 
-//go:embed config.example.toml
+//go:embed config.example.yaml
 var example []byte
 
 func main() {
@@ -32,9 +32,9 @@ func run(args []string) error {
 		return err
 	}
 	fs := flag.NewFlagSet("codex-bridge", flag.ContinueOnError)
-	path := fs.String("config", filepath.Join(dir, "codex-bridge", "config.toml"), "TOML config file")
+	path := fs.String("config", filepath.Join(dir, "codex-bridge", "config.yaml"), "YAML config file")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: codex-bridge [--config FILE] init|edit|sync|unsync|start|stop|status|serve\n\ninit     Create an example config\nedit     Open config in $VISUAL / $EDITOR, or detect an installed terminal editor\nsync     Add models to Codex /model (restart Codex afterward)\nunsync   Restore previous Codex provider settings\nstart    Start proxy in background\nstop     Stop proxy gracefully\nstatus   Check the running proxy\nserve    Run in foreground (Ctrl-C stops)")
+		fmt.Fprintln(fs.Output(), "Usage: codex-bridge [--config FILE] init|edit|sync|unsync|start|stop|status|serve\n\ninit     Create an example config\nedit     Open config in $VISUAL / $EDITOR, or detect an installed terminal editor\nsync     Add models to Codex /model (restart Codex afterward)\nunsync   Restore previous Codex provider settings\nstart    Start proxy in background\nstop     Stop proxy gracefully\nstatus   Show proxy health, model count, and Codex sync status\nserve    Run in foreground (Ctrl-C stops)")
 		fs.PrintDefaults()
 	}
 	if err = fs.Parse(args); err != nil {
@@ -88,7 +88,10 @@ func run(args []string) error {
 		return withLock(filepath.Join(codexDir(), ".codex-bridge.lock"), unsyncCodex)
 	}
 	c, err := loadConfig(*path)
-	if command == "stop" || command == "status" {
+	if command == "status" {
+		return printStatus(*path, c, err)
+	}
+	if command == "stop" {
 		if running, e := os.ReadFile(*path + ".running"); e == nil && validListen(string(running)) {
 			c.Listen, err = string(running), nil
 		}
@@ -106,12 +109,6 @@ func run(args []string) error {
 	switch command {
 	case "serve":
 		return serve(*path, c, token)
-	case "status":
-		if err = control(c, token, *path, "GET", "/health"); err != nil {
-			return fmt.Errorf("not running or unreachable: %w", err)
-		}
-		fmt.Println("Running at http://" + c.Listen)
-		return nil
 	case "stop":
 		if err = control(c, token, *path, "POST", "/stop"); err != nil {
 			return err
@@ -130,6 +127,39 @@ func run(args []string) error {
 		fs.Usage()
 		return fmt.Errorf("unknown command %q", command)
 	}
+}
+
+func printStatus(path string, c Config, configErr error) error {
+	running := c
+	if address, err := os.ReadFile(path + ".running"); err == nil && validListen(string(address)) {
+		running.Listen = string(address)
+	}
+	token, err := os.ReadFile(path + ".token")
+	if err == nil {
+		err = control(running, string(token), path, "GET", "/health")
+	}
+	if err == nil {
+		fmt.Println("Running at http://" + running.Listen)
+	} else {
+		fmt.Println("Stopped or unreachable at http://" + running.Listen)
+	}
+	fmt.Println("Config:", path)
+	if configErr != nil {
+		fmt.Println("Models: unavailable (invalid config)")
+		fmt.Println("Codex sync: unsynced (bridge config is invalid)")
+		return configErr
+	}
+	fmt.Printf("Models: %d external\n", len(c.Models))
+	if reason := codexSyncStatus(path, c); reason != "" {
+		fmt.Println("Codex sync: unsynced (" + reason + ")")
+	} else {
+		fmt.Println("Codex sync: synced")
+	}
+	fmt.Println("Codex config:", filepath.Join(codexDir(), "config.toml"))
+	if err != nil {
+		return fmt.Errorf("proxy is not running or unreachable: %w", err)
+	}
+	return nil
 }
 
 func editorCommand(path string) (*exec.Cmd, error) {

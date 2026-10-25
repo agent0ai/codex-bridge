@@ -2,7 +2,7 @@
 
 A small Go proxy that puts OpenAI-compatible Chat Completions and Responses models in Codex CLI's `/model` picker, alongside your ChatGPT subscription. Switch models within a conversation; no profiles or patched Codex required.
 
-Proof of concept tested with **Codex CLI 0.164.0** on Debian Linux. One runtime dependency (the TOML parser), no database, no JavaScript runtime for the proxy. The stripped Linux binary is about 6.7 MiB; the running proxy used about 15 MiB RSS during the initial live tests. Linux and macOS process APIs are used; Windows support is not implemented.
+Proof of concept tested with **Codex CLI 0.164.0** on Debian Linux. Two small parser dependencies (YAML for bridge settings, TOML for Codex settings), no database, no JavaScript runtime for the proxy. The running proxy used about 15 MiB RSS during the initial live tests. Linux and macOS process APIs are used; Windows support is not implemented.
 
 ## Ready-to-use test container
 
@@ -15,7 +15,7 @@ cd /work
 codex
 ```
 
-Inside Codex, enter `/model` and select `a0-qwen`, `a0-deepseek`, `a0-vision`, or a subscription model such as `GPT-6-Luna`. The picker can scroll; external models follow the built-ins. To start with a specific external model, use `codex -m a0-qwen`.
+Inside Codex, enter `/model` and select `a0-qwen`, `a0-deepseek`, `a0-vision`, or a subscription model such as `GPT-6-Luna`. External models appear first, in config order. To start with a specific external model, use `codex -m a0-qwen`.
 
 ```bash
 codex-bridge edit       # $VISUAL, then $EDITOR, then automatic editor detection
@@ -33,12 +33,13 @@ Install Codex CLI 0.164.0 and Go 1.24.4 or newer, then:
 
 ```bash
 go build -trimpath -ldflags='-s -w' -o codex-bridge .
+mkdir -p ~/.local/bin
 install -m 755 codex-bridge ~/.local/bin/codex-bridge
 codex-bridge init
 codex-bridge edit
 ```
 
-Put `~/.local/bin` on your `PATH`. The default config is `$XDG_CONFIG_HOME/codex-bridge/config.toml` on Linux (normally `~/.config/codex-bridge/config.toml`). The proxy also supports an explicit file: `codex-bridge --config /path/models.toml start`.
+Put `~/.local/bin` on your `PATH`. The default config is `$XDG_CONFIG_HOME/codex-bridge/config.yaml` on Linux (normally `~/.config/codex-bridge/config.yaml`). The proxy also supports an explicit file: `codex-bridge --config /path/models.yaml start`. Legacy `.toml` files remain readable when passed explicitly with `--config`. Codex's own `~/.codex/config.toml` still uses TOML.
 
 `edit` honors `$VISUAL`, then `$EDITOR`. With neither set, it searches `PATH` in this order: `micro`, `nano`, `mcedit`, `joe`, `nvim`, `vim`, the system `editor` command, then `vi`. The first available executable is used. An explicit editor setting that fails produces an error rather than silently switching editors. If no editor is found or the selected editor fails, the error includes the full config path so you can edit it manually.
 
@@ -57,31 +58,28 @@ The bridge uses Codex's existing subscription authentication and refresh logic. 
 
 ## Config
 
-See [config.example.toml](config.example.toml) for the three tested models. A model entry looks like:
+See [config.example.yaml](config.example.yaml) for the three tested models. A model entry looks like:
 
-```toml
-listen = "127.0.0.1:8787"
-
-[[models]]
-name = "my-model"                       # unique name in Codex's picker
-model = "actual-provider-model-id"       # defaults to name
-base_url = "https://provider.example/v1"
-api = "chat"                            # chat or responses
-api_key_env = "MY_PROVIDER_KEY"          # or api_key = "literal key"
-context_window = 131072                  # defaults to a conservative 32768
-vision = false                          # set true for image-capable models
-reasoning_efforts = ["low", "high"]      # omit for models without effort control
-drop_params = ["parallel_tool_calls"]    # omit parameters the provider rejects
-
-[models.params]
-temperature = 0.2
-max_tokens = 8192
-
-[models.params.vendor_options]
-thinking = true
+```yaml
+listen: 127.0.0.1:8787
+models:
+  - name: my-model                       # unique name in Codex's picker
+    model: actual-provider-model-id      # defaults to name
+    base_url: https://provider.example/v1
+    api: chat                            # chat or responses
+    api_key_env: MY_PROVIDER_KEY          # or api_key: "literal key"
+    context_window: 131072                # defaults to 32768
+    vision: false                        # true for image-capable models
+    reasoning_efforts: [low, high]        # omit if unsupported
+    drop_params: [parallel_tool_calls]   # omit parameters the provider rejects
+    params:
+      temperature: 0.2
+      max_tokens: 8192
+      vendor_options:
+        thinking: true
 ```
 
-`params` accepts arbitrary TOML values and recursively merges them into the upstream JSON body after translation. `drop_params` removes top-level fields first. Routing and protocol fields (`model`, `input`, `messages`, `tools`, `stream`) are controlled by the bridge. Credentials use a Bearer token; omit both key settings for an unauthenticated local API. URLs may include an arbitrary path and query parameters, and may point to the API base or complete endpoint.
+`params` accepts JSON-compatible YAML values and recursively merges them into the upstream JSON body after translation. Unknown config fields, duplicate keys, multiple YAML documents, and parameters with non-string map keys are rejected. `drop_params` removes top-level fields first. Routing and protocol fields (`model`, `input`, `messages`, `tools`, `stream`) are controlled by the bridge. Credentials use a Bearer token; omit both key settings for an unauthenticated local API. URLs may include an arbitrary path and query parameters, and may point to the API base or complete endpoint.
 
 Changing `context_window` does not enlarge the provider's real context limit. Set it to a value the model actually supports. An API-compatible model still needs good tool-call support to perform coding tasks reliably.
 
@@ -94,11 +92,21 @@ Changing `context_window` does not enlarge the provider's real context limit. Se
 | `sync` | Validate config, generate a version-matched model catalog, and select the local bridge provider. |
 | `start` | Start one background proxy; repeated starts reuse the running instance. |
 | `stop` | Stop the listener and allow active requests up to ten seconds to finish. |
-| `status` | Check the authenticated local health endpoint. |
+| `status` | Show proxy health, configured model count, and whether Codex's provider/catalog match the bridge. |
 | `serve` | Run in the foreground; stop with Ctrl-C. |
 | `unsync` | Restore the prior provider/catalog settings while preserving unrelated config changes. |
 
 `sync` writes `$CODEX_HOME/config.toml` and `codex-bridge-models.json` (normally under `~/.codex`). It preserves unrelated settings and comments, creates `config.toml.bridge-backup`, and is idempotent. It refuses to overwrite an existing unmanaged `codex-bridge` provider or a separate custom model catalog. Profiles are never created. Model aliases must not collide with built-in model names.
+
+`status` compares the current provider, local token, listen address, and complete model catalog against the expected settings. It reports `synced` or `unsynced` with a reason. Changing API keys or upstream parameters does not require sync; changing model metadata does. The check is read-only and describes the base Codex config on disk, not an already-open session or separate profile/command-line override. Restart open Codex sessions after sync to reload the catalog.
+
+```text
+Running at http://127.0.0.1:8787
+Config: /root/.config/codex-bridge/config.yaml
+Models: 1 external
+Codex sync: synced
+Codex config: /root/.codex/config.toml
+```
 
 All selected models go through the proxy while synced, so keep it running. To return to your original setup:
 
@@ -108,7 +116,7 @@ codex-bridge stop
 # Restart Codex. If you last selected an external alias, choose a built-in model.
 ```
 
-The proxy binds only to a loopback IP and requires a random local token written by `sync`. Browser-origin requests are rejected. Third-party requests are built with only that model's credentials; subscription headers are sent only to fixed OpenAI destinations. HTTP redirects are not followed for third-party requests. Logs contain model, status, and timing rather than prompts or keys. The log is next to the config as `config.toml.log`.
+The proxy binds only to a loopback IP and requires a random local token written by `sync`. Browser-origin requests are rejected. Third-party requests are built with only that model's credentials; subscription headers are sent only to fixed OpenAI destinations. HTTP redirects are not followed for third-party requests. Logs contain model, status, and timing rather than prompts or keys. The log is next to the config as `config.yaml.log`.
 
 ## Translation and limits
 
@@ -155,7 +163,7 @@ Hit ratio is `cached_input_tokens / input_tokens`. Follow-up turns had weighted 
 
 Standard `prompt_tokens_details.cached_tokens` maps to Responses `input_tokens_details.cached_tokens`; DeepSeek's `prompt_cache_hit_tokens` is a fallback. Input/output detail fields are retained. Codex CLI reports cumulative thread usage after `exec resume`, so the test subtracts the previous total and checks that input, cached input, and output counts exactly match the upstream turn. See [cache-verification.json](cache-verification.json) for the original usage objects and verified deltas.
 
-The supplied gateway replaces `prompt_cache_key` with its own stable account key. Preserving Codex's key fixes a portability issue for other providers, even though that gateway already supplied one. Cache availability, retention, routing, model changes, compaction, and real prompt changes still affect reuse; these measurements do not guarantee a particular hit ratio for other workloads.
+The supplied gateway replaces `prompt_cache_key` with its own stable account key. Preserving Codex's key fixes a portability issue for other providers, even though that gateway already supplied one. A later YAML-config verification run measured 36.28% weighted follow-up reuse, with an unchanged prefix and exact usage accounting; its raw usage is also in the report. Cache availability, retention, routing, model changes, compaction, and real prompt changes still affect reuse; these measurements do not guarantee a particular hit ratio for other workloads.
 
 ## Verification and reproducible Docker image
 
@@ -170,7 +178,7 @@ docker exec -it my-codex-bridge bash
 
 No ports need publishing: Codex and the proxy share the container's loopback interface. This image uses Debian slim, a static Go bridge, the native Codex binary, Node for Codex's JavaScript tool, and basic coding tools. The image contains no credentials. Keep or back up the container's home directory before removing it.
 
-The live smoke test makes real provider requests and creates a temporary marker file using Codex tools:
+The live smoke test makes real provider requests and creates a temporary marker file using Codex tools. The cache script uses PyYAML, included in the image (`apt install python3-yaml` when running it separately on Debian):
 
 ```bash
 docker exec codex-bridge-lab python3 /opt/bridge-smoke.py

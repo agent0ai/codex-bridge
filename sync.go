@@ -108,10 +108,14 @@ func bundledCatalog() (object, error) {
 func makeCatalog(base object, c Config) (object, error) {
 	models := arr(base["models"])
 	names := map[string]bool{}
+	priority := 0
 	template := obj(models[0])
 	for _, raw := range models {
 		m := obj(raw)
 		names[str(m["slug"])] = true
+		if p := int(number(m["priority"])); p < priority {
+			priority = p
+		}
 		if m["slug"] == "gpt-5.5" {
 			template = m
 		}
@@ -123,7 +127,7 @@ func makeCatalog(base object, c Config) (object, error) {
 		b, _ := json.Marshal(template)
 		var entry object
 		_ = json.Unmarshal(b, &entry)
-		merge(entry, object{"slug": m.Name, "display_name": m.Name, "description": m.Model + " via " + m.API + " (codex-bridge)", "visibility": "list", "supported_in_api": true, "priority": 100 + i, "context_window": m.ContextWindow, "max_context_window": m.ContextWindow, "auto_compact_token_limit": nil, "upgrade": nil, "availability_nux": nil, "default_reasoning_level": nil, "supported_reasoning_levels": []any{}, "additional_speed_tiers": []any{}, "service_tiers": []any{}, "default_service_tier": nil, "tool_mode": "direct", "multi_agent_version": nil, "multi_agent_reasoning_effort": nil, "supports_search_tool": false, "supports_experimental_context": false, "use_responses_lite": false, "supports_reasoning_effort_updates": false, "node_repl_auto_review_required": false, "node_repl_disabled": true, "experimental_supported_tools": []any{}, "support_verbosity": false, "default_verbosity": nil, "supports_reasoning_summary_parameter": false, "supports_image_detail_original": false, "comp_hash": nil, "input_modalities": []string{"text"}})
+		merge(entry, object{"slug": m.Name, "display_name": m.Name, "description": m.Model + " via " + m.API + " (codex-bridge)", "visibility": "list", "supported_in_api": true, "priority": priority - len(c.Models) + i, "context_window": m.ContextWindow, "max_context_window": m.ContextWindow, "auto_compact_token_limit": nil, "upgrade": nil, "availability_nux": nil, "default_reasoning_level": nil, "supported_reasoning_levels": []any{}, "additional_speed_tiers": []any{}, "service_tiers": []any{}, "default_service_tier": nil, "tool_mode": "direct", "multi_agent_version": nil, "multi_agent_reasoning_effort": nil, "supports_search_tool": false, "supports_experimental_context": false, "use_responses_lite": false, "supports_reasoning_effort_updates": false, "node_repl_auto_review_required": false, "node_repl_disabled": true, "experimental_supported_tools": []any{}, "support_verbosity": false, "default_verbosity": nil, "supports_reasoning_summary_parameter": false, "supports_image_detail_original": false, "comp_hash": nil, "input_modalities": []string{"text"}})
 		if m.Vision {
 			entry["input_modalities"] = []string{"text", "image"}
 		}
@@ -138,6 +142,60 @@ func makeCatalog(base object, c Config) (object, error) {
 		models = append(models, entry)
 	}
 	return object{"models": models}, nil
+}
+
+func providerSettings(c Config, token string) object {
+	return object{"name": "Codex Bridge", "base_url": "http://" + c.Listen + "/v1", "wire_api": "responses", "requires_openai_auth": true, "supports_websockets": false, "http_headers": object{"X-Codex-Bridge-Token": token}}
+}
+
+func sameJSON(a, b any) bool {
+	x, errA := json.Marshal(a)
+	y, errB := json.Marshal(b)
+	return errA == nil && errB == nil && bytes.Equal(x, y)
+}
+
+// Compare the settings on disk; an already-open Codex session keeps its startup catalog.
+func codexSyncStatus(path string, c Config) string {
+	dir := codexDir()
+	raw, err := os.ReadFile(filepath.Join(dir, "config.toml"))
+	if err != nil {
+		return "cannot read Codex config"
+	}
+	var config object
+	if err := toml.Unmarshal(raw, &config); err != nil {
+		return "Codex config is invalid"
+	}
+	if config["model_provider"] != "codex-bridge" {
+		return "Codex provider is not codex-bridge"
+	}
+	catalogPath := filepath.Join(dir, "codex-bridge-models.json")
+	if config["model_catalog_json"] != catalogPath {
+		return "Codex uses a different model catalog"
+	}
+	token, err := os.ReadFile(path + ".token")
+	if err != nil || len(token) != 64 {
+		return "local bridge token is missing or invalid"
+	}
+	if !sameJSON(obj(config["model_providers"])["codex-bridge"], providerSettings(c, string(token))) {
+		return "provider settings changed; run sync"
+	}
+	raw, err = os.ReadFile(catalogPath)
+	var actual object
+	if err != nil || json.Unmarshal(raw, &actual) != nil {
+		return "model catalog is missing or invalid"
+	}
+	base, err := bundledCatalog()
+	if err != nil {
+		return "cannot check installed Codex model defaults"
+	}
+	want, err := makeCatalog(base, c)
+	if err != nil {
+		return err.Error()
+	}
+	if !sameJSON(actual, want) {
+		return "model catalog changed; run sync"
+	}
+	return ""
 }
 
 func syncCodex(path string, c Config) error {
@@ -189,7 +247,7 @@ func syncCodex(path string, c Config) error {
 	if err != nil {
 		return err
 	}
-	provider, err := toml.Marshal(object{"model_providers": object{"codex-bridge": object{"name": "Codex Bridge", "base_url": "http://" + c.Listen + "/v1", "wire_api": "responses", "requires_openai_auth": true, "supports_websockets": false, "http_headers": object{"X-Codex-Bridge-Token": token}}}})
+	provider, err := toml.Marshal(object{"model_providers": object{"codex-bridge": providerSettings(c, token)}})
 	if err != nil {
 		return err
 	}
@@ -224,7 +282,7 @@ func syncCodex(path string, c Config) error {
 	if err = atomicWrite(target, next); err != nil {
 		return err
 	}
-	fmt.Printf("Synced %d external models plus %d built-in models to %s. Restart Codex to refresh /model.\n", len(c.Models), len(arr(base["models"])), target)
+	fmt.Printf("Synced %d external models plus %d built-in models to %s.\nRestart open Codex sessions; external models appear first in /model.\n", len(c.Models), len(arr(base["models"])), target)
 	return nil
 }
 

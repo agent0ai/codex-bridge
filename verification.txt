@@ -74,3 +74,16 @@ PASS go test ./... and go vet ./...
 PASS editor priority, fallback, explicit overrides with arguments, paths with spaces, and missing-editor guidance.
 PASS real terminal launches Micro with VISUAL/EDITOR unset and exits with Ctrl-Q without changing the test config.
 Installed matching binaries in /root/.local/bin and /usr/local/bin for existing shells.
+
+YAML configuration, sync status, and model picker — 2026-10-25 UTC
+SHA-256: 6a65b50bb81d27dd867e091a460afad90e7d45d3565d9e996f3670dea685426b
+PASS go test -race ./... and go vet ./...
+PASS YAML strict fields, duplicate/multiple-document rejection, JSON-compatible params, and legacy TOML value equivalence.
+PASS sync status detects changed model metadata, removed models, changed port, modified catalog, and unsync.
+PASS unrelated Codex changes and hot-loaded provider params/credentials do not require sync.
+PASS host (1 model) and lab (3 models) migrated to private YAML files with all values and local tokens preserved; originals retained.
+PASS fresh Codex model/list now puts a0-qwen first; it was ninth in the previous visible catalog.
+PASS rebuilt Debian image: init/edit/sync/start/status/unsync/status/stop.
+PASS YAML live Codex cache test: stable request prefix and exact input/cached/output accounting.
+Latest warm cache ratio was 36.28% (0%, 35.96%, 72.85% across follow-up turns); raw usage is in cache-verification.json.
+Host api_key is still an example placeholder, resulting in upstream 401 Invalid A0 API key; migration preserved it. Lab test credentials worked.

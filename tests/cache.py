@@ -5,7 +5,6 @@ import hashlib
 import http.server
 import json
 from pathlib import Path
-import re
 import socket
 import subprocess
 import tempfile
@@ -14,14 +13,15 @@ import time
 import tomllib
 import urllib.error
 import urllib.request
+import yaml
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--model", default="a0-qwen")
-parser.add_argument("--config", type=Path, default=Path.home() / ".config/codex-bridge/config.toml")
+parser.add_argument("--config", type=Path, default=Path.home() / ".config/codex-bridge/config.yaml")
 parser.add_argument("--report", type=Path)
 args = parser.parse_args()
 source = args.config.read_text()
-config = tomllib.loads(source)
+config = tomllib.loads(source) if args.config.suffix == ".toml" else yaml.safe_load(source)
 model = next(m for m in config["models"] if m["name"] == args.model)
 assert model["api"] == "chat", "This test measures the Chat Completions adapter."
 upstream = model["base_url"].rstrip("/")
@@ -80,10 +80,11 @@ with tempfile.TemporaryDirectory(prefix="bridge-cache-") as directory:
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
-    private = re.sub(r"(?m)^listen\s*=.*$", f'listen = "127.0.0.1:{port}"', source, count=1)
-    private = re.sub(r"(?m)^base_url\s*=.*$", f'base_url = "http://127.0.0.1:{tap.server_port}/v1"', private)
-    private_path = root / "config.toml"
-    private_path.write_text(private)
+    config["listen"] = f"127.0.0.1:{port}"
+    for entry in config["models"]:
+        entry["base_url"] = f"http://127.0.0.1:{tap.server_port}/v1"
+    private_path = root / "config.yaml"
+    private_path.write_text(yaml.safe_dump(config, sort_keys=False))
     private_path.chmod(0o600)
     with (root / "proxy.log").open("w") as log:
         process = subprocess.Popen(["codex-bridge", "--config", str(private_path), "serve"], stdout=log, stderr=log)
@@ -91,7 +92,7 @@ with tempfile.TemporaryDirectory(prefix="bridge-cache-") as directory:
     try:
         for _ in range(100):
             try:
-                token = (root / "config.toml.token").read_text()
+                token = (root / "config.yaml.token").read_text()
                 health = urllib.request.Request(f"http://127.0.0.1:{port}/health", headers={"X-Codex-Bridge-Token": token})
                 with urllib.request.urlopen(health, timeout=1):
                     break
