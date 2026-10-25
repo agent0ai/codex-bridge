@@ -1,7 +1,7 @@
 Verification — 2026-10-25 UTC
 
 Environment: Debian trixie-slim, Codex CLI 0.164.0, Linux amd64.
-Final binary SHA-256: 00b1d77d5f7cc794f2725cf9422db648bb5be37899d03bae3d1df68e336588fc
+Proxy/attachment/cache verification binary SHA-256: 00b1d77d5f7cc794f2725cf9422db648bb5be37899d03bae3d1df68e336588fc
 
 PASS go test -race ./...
 PASS go vet ./...
@@ -59,3 +59,11 @@ Observed limits:
 - Cache reuse depends on the provider and workload. The gateway supplies its own
   stable cache key. No claim is made that every provider, model, or Responses-only
   feature was tested.
+
+Local installation and editor error check — 2026-10-25 UTC
+Installed binary: /root/.local/bin/codex-bridge (static Linux amd64)
+SHA-256: 119869e2bac026069fcbe963e519e97f98d7693b4b478e7b5f6880dd19be3740
+PASS go test ./... including missing-editor config path regression.
+PASS actual invocation with VISUAL/EDITOR unset reports the full config path.
+PASS fresh Bash resolves the user binary; no default editor is configured.
+Micro 2.0.14 is available. Host config remains uninitialized for user testing.

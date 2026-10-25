@@ -24,6 +24,16 @@ func decode(t *testing.T, s string) object {
 	return o
 }
 
+func TestMissingEditorShowsConfigPath(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "my config.toml")
+	t.Setenv("VISUAL", "")
+	t.Setenv("EDITOR", filepath.Join(t.TempDir(), "missing-editor"))
+	err := run([]string{"--config", path, "edit"})
+	if err == nil || !strings.Contains(err.Error(), path) || !strings.Contains(err.Error(), "VISUAL/EDITOR") {
+		t.Fatalf("missing config path or editor guidance: %v", err)
+	}
+}
+
 func TestConversationTranslation(t *testing.T) {
 	req := decode(t, `{"model":"alias","instructions":"system guidance","tools":[{"type":"namespace","name":"repo","tools":[{"type":"function","name":"read","parameters":{"type":"object"}}]},{"type":"custom","name":"apply_patch","description":"patch"}],"input":[{"role":"developer","content":[{"type":"input_text","text":"developer guidance"}]},{"role":"user","content":[{"type":"input_text","text":"look"},{"type":"input_image","image_url":"data:image/png;base64,AA","detail":"original"}]},{"type":"reasoning","summary":[{"type":"summary_text","text":"consider"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Checking"}]},{"type":"function_call","namespace":"repo","name":"read","call_id":"c1","arguments":"{}"},{"type":"custom_tool_call","name":"apply_patch","call_id":"c2","input":"*** Begin Patch\n*** End Patch"},{"type":"function_call_output","call_id":"c1","output":"file"},{"type":"custom_tool_call_output","call_id":"c2","output":"OK"},{"role":"user","content":"next"}],"text":{"format":{"type":"json_schema","name":"result","schema":{"type":"object"},"strict":true}}}`)
 	chat, names, err := toChat(req)

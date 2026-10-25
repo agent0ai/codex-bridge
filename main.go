@@ -76,7 +76,10 @@ func run(args []string) error {
 		cmd.Stdin = os.Stdin
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
-		return cmd.Run()
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("editor failed: %w\nConfig file: %s\nEdit this file manually, or set VISUAL/EDITOR to an installed editor such as micro", err, *path)
+		}
+		return nil
 	}
 	if command == "unsync" {
 		return withLock(filepath.Join(codexDir(), ".codex-bridge.lock"), unsyncCodex)

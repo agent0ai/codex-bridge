@@ -40,6 +40,8 @@ codex-bridge edit
 
 Put `~/.local/bin` on your `PATH`. The default config is `$XDG_CONFIG_HOME/codex-bridge/config.toml` on Linux (normally `~/.config/codex-bridge/config.toml`). The proxy also supports an explicit file: `codex-bridge --config /path/models.toml start`.
 
+`edit` uses `$VISUAL`, then `$EDITOR`, then `vi`. If the editor is missing or fails, it prints the full config path so you can edit the file manually. To select Micro for one invocation without setting a default, run `VISUAL= EDITOR=micro codex-bridge edit`.
+
 For the supplied example, set your provider key in the shell **before starting the proxy**:
 
 ```bash
