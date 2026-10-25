@@ -137,3 +137,28 @@ PASS installed binary smoke test with a fresh path and an editor that requires a
 existing nonempty config before opening it.
 Installed in both host bin directories and codex-bridge-lab. No live API requests
 were repeated; the user's config/key and the lab's three-model config were preserved.
+
+Release packaging, concise README, and GLM Flash — 2026-10-25 UTC
+Linux amd64 SHA-256: 4ac9b7daa67746d829d3254791911aba5e5fca86a5388b6a64f8dbe54d0a704f
+Linux arm64 SHA-256: 4e6db7a988662bbb2bbe721f4161c3615b9554ad0296658c8a3eeeea971376cb
+README reduced to 54 lines with separate latest-release downloads, quick start,
+Agent Zero footer, licensing and sponsorship; full guide retained in docs/guide.md.
+Tag release workflow adapted from Tuxee for native amd64/arm64 Go builds, draft
+publication, commit notes, checksums, license assets, and latest-version ordering.
+PASS actionlint v1.7.12 and release-notes.py --self-test.
+PASS mocked publication checks for first/newer/older releases, draft retries, and
+refusing to overwrite an already published release.
+PASS go test -race ./... and go vet ./...
+PASS static Linux amd64 and arm64 builds; ELF architectures verified.
+PASS curl/download/install/PATH/default-config smoke test with the amd64 asset.
+Live/default upstream model is now Venice z-ai-glm-5-3-flash, preserving alias
+a0-glm-5-3 and the user's credential. Context 1048576 and vision support match
+Venice's public model API. The default credential remains the placeholder "...".
+PASS minimal gateway response OK.
+PASS real Codex shell-tool turn: BRIDGE_FLASH_OK, 1 completed tool, 136095 input
+tokens across the turn, 31 output tokens, 0 cached input tokens reported.
+PASS image sent through the proxy: solid-red PNG identified as Red.
+Updated binaries installed in both host bin directories and the lab; host catalog
+files synced. Active shared Codex server was not restarted; sync --force refreshes
+its metadata. GitHub publication and native ARM execution were not run locally;
+the workflow gates publication on both native jobs. No repository push/tag made.

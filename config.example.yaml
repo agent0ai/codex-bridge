@@ -2,10 +2,11 @@ listen: 127.0.0.1:8787
 
 models:
   - name: a0-glm-5-3
-    model: e2ee-glm-5-3-p
+    model: z-ai-glm-5-3-flash
     base_url: https://llm.agent-zero.ai/v1
     api: chat
-    context_window: 240000
+    context_window: 1048576
+    vision: true
     # Replace the key below, or comment it out and uncomment api_key_env.
     api_key: "..."
     # api_key_env: AGENT_ZERO_API_KEY

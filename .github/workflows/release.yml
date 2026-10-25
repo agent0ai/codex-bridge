@@ -1,0 +1,121 @@
+name: Release codex-bridge
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codex-bridge-release
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ github.ref_name }}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Verify
+        run: |
+          python3 .github/release-notes.py "$TAG" > /tmp/release-notes.md
+          python3 .github/release-notes.py --self-test
+          go test -race ./...
+          go vet ./...
+      - name: Build and check native binary
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          test "$(go env GOARCH)" = "$ARCH"
+          mkdir -p release
+          CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" go build -trimpath -ldflags='-s -w' -o "release/codex-bridge-linux-$ARCH" .
+          "release/codex-bridge-linux-$ARCH" --help
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.arch }}
+          path: release/*
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binary-*
+          path: release
+          merge-multiple: true
+      - name: Prepare release assets and notes
+        run: |
+          test -f release/codex-bridge-linux-amd64
+          test -f release/codex-bridge-linux-arm64
+          cp LICENSE THIRD_PARTY_NOTICES.md release/
+          (cd release && sha256sum codex-bridge-linux-* > checksums.txt)
+          python3 .github/release-notes.py "$TAG" > release-notes.md
+      - name: Prepare draft
+        id: release
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const fs = require('fs');
+            const {owner, repo} = context.repo;
+            const tag = process.env.TAG;
+            const version = s => {
+              if (!/^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(s)) throw new Error('Invalid stable tag');
+              return s.slice(1).split('.').map(BigInt);
+            };
+            let latest = true;
+            try {
+              const current = version((await github.rest.repos.getLatestRelease({owner, repo})).data.tag_name);
+              const next = version(tag);
+              latest = next.some((n, i) => n > current[i] && next.slice(0, i).every((v, j) => v === current[j]));
+            } catch (error) { if (error.status !== 404) throw error; }
+            let release;
+            try {
+              release = (await github.rest.repos.getReleaseByTag({owner, repo, tag})).data;
+              if (!release.draft) throw new Error('Refusing to overwrite a published release');
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              release = (await github.rest.repos.createRelease({
+                owner, repo, tag_name: tag, name: `codex-bridge ${tag}`, draft: true,
+                body: fs.readFileSync('release-notes.md', 'utf8')
+              })).data;
+            }
+            core.setOutput('id', release.id);
+            core.setOutput('latest', String(latest));
+      - name: Upload verified release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" release/* --clobber
+      - name: Publish complete GitHub release
+        uses: actions/github-script@v8
+        env:
+          RELEASE_ID: ${{ steps.release.outputs.id }}
+          MAKE_LATEST: ${{ steps.release.outputs.latest }}
+        with:
+          script: |
+            await github.rest.repos.updateRelease({
+              ...context.repo, release_id: Number(process.env.RELEASE_ID),
+              draft: false, make_latest: process.env.MAKE_LATEST
+            });
