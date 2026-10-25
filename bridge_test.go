@@ -52,7 +52,7 @@ func TestInitAndEditCreateConfig(t *testing.T) {
 					t.Fatal(err)
 				}
 				c, err := loadConfig(path)
-				if err != nil || len(c.Models) != 1 || c.Models[0].Name != "a0-glm-5-3" || c.Models[0].Model != "z-ai-glm-5-3-flash" || c.Models[0].ContextWindow != 1048576 || !c.Models[0].Vision || c.Models[0].APIKey != "..." || c.Models[0].APIKeyEnv != "" || !sameJSON(c.Models[0].DropParams, []string{"reasoning_effort"}) {
+				if err != nil || len(c.Models) != 1 || c.Models[0].Name != "a0-deepseek" || c.Models[0].Model != "deepseek-v4-1-flash" || c.Models[0].ContextWindow != 1048576 || c.Models[0].Vision || c.Models[0].APIKey != "..." || c.Models[0].APIKeyEnv != "" || !sameJSON(c.Models[0].DropParams, []string{"reasoning_effort"}) {
 					t.Fatal("wrong initial config:", err)
 				}
 				info, err := os.Stat(path)
@@ -423,7 +423,7 @@ func TestYAMLAndLegacyConfigPreserveValues(t *testing.T) {
 	if err != nil || !sameJSON(got, want) {
 		t.Fatalf("migration changed config values: %v", err)
 	}
-	if c, err := loadConfig("config.example.yaml"); err != nil || len(c.Models) != 1 || c.Models[0].Name != "a0-glm-5-3" || c.Models[0].APIKey != "..." {
+	if c, err := loadConfig("config.example.yaml"); err != nil || len(c.Models) != 1 || c.Models[0].Name != "a0-deepseek" || c.Models[0].APIKey != "..." {
 		t.Fatalf("example config invalid: %v", err)
 	}
 }

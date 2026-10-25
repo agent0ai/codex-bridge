@@ -49,7 +49,7 @@ Put the `export PATH` line in `~/.bashrc` (Bash) or `~/.zshrc` (Zsh) for future 
 
 `edit` honors `$VISUAL`, then `$EDITOR`. With neither set, it searches `PATH` in this order: `micro`, `nano`, `mcedit`, `joe`, `nvim`, `vim`, the system `editor` command, then `vi`. The first available executable is used. An explicit editor setting that fails produces an error rather than silently switching editors. If no editor is found or the selected editor fails, the error includes the full config path so you can edit it manually.
 
-The initial config contains Venice GLM 5.3 Flash under the alias `a0-glm-5-3`, with the tested reasoning parameter fix. Replace `api_key: "..."` with your key. To use an environment variable instead, comment out `api_key`, uncomment `api_key_env: AGENT_ZERO_API_KEY`, and export that variable **before starting the proxy**:
+The initial config contains Venice DeepSeek V4.1 Flash (`deepseek-v4-1-flash`) under the alias `a0-deepseek`, with the tested reasoning parameter fix. Replace `api_key: "..."` with your key. To use an environment variable instead, comment out `api_key`, uncomment `api_key_env: AGENT_ZERO_API_KEY`, and export that variable **before starting the proxy**:
 
 ```bash
 read -rs -p 'Provider API key: ' AGENT_ZERO_API_KEY; echo
@@ -65,11 +65,11 @@ codex login             # only if you have not already logged in
 codex --no-daemon
 ```
 
-The bridge uses Codex's existing subscription authentication and refresh logic. It never modifies `auth.json` or logs credentials. A subscription login is required for the normal mixed subscription/external setup. For external-only use without signing in, launch `codex -c model_providers.codex-bridge.requires_openai_auth=false -m a0-glm-5-3`.
+The bridge uses Codex's existing subscription authentication and refresh logic. It never modifies `auth.json` or logs credentials. A subscription login is required for the normal mixed subscription/external setup. For external-only use without signing in, launch `codex -c model_providers.codex-bridge.requires_openai_auth=false -m a0-deepseek`.
 
 ## Config
 
-See [config.example.yaml](../config.example.yaml) for the initial GLM 5.3 Flash config. The existing test container keeps its separate three-model config for the Qwen, DeepSeek, and vision tests. A model entry looks like:
+See [config.example.yaml](../config.example.yaml) for the initial DeepSeek V4.1 Flash config. The existing test container keeps its separate three-model config for the Qwen, DeepSeek, and vision tests. A model entry looks like:
 
 ```yaml
 listen: 127.0.0.1:8787
