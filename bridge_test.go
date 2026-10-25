@@ -1,0 +1,355 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/pelletier/go-toml/v2"
+)
+
+func decode(t *testing.T, s string) object {
+	t.Helper()
+	var o object
+	if err := json.Unmarshal([]byte(s), &o); err != nil {
+		t.Fatal(err)
+	}
+	return o
+}
+
+func TestConversationTranslation(t *testing.T) {
+	req := decode(t, `{"model":"alias","instructions":"system guidance","tools":[{"type":"namespace","name":"repo","tools":[{"type":"function","name":"read","parameters":{"type":"object"}}]},{"type":"custom","name":"apply_patch","description":"patch"}],"input":[{"role":"developer","content":[{"type":"input_text","text":"developer guidance"}]},{"role":"user","content":[{"type":"input_text","text":"look"},{"type":"input_image","image_url":"data:image/png;base64,AA","detail":"original"}]},{"type":"reasoning","summary":[{"type":"summary_text","text":"consider"}]},{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Checking"}]},{"type":"function_call","namespace":"repo","name":"read","call_id":"c1","arguments":"{}"},{"type":"custom_tool_call","name":"apply_patch","call_id":"c2","input":"*** Begin Patch\n*** End Patch"},{"type":"function_call_output","call_id":"c1","output":"file"},{"type":"custom_tool_call_output","call_id":"c2","output":"OK"},{"role":"user","content":"next"}],"text":{"format":{"type":"json_schema","name":"result","schema":{"type":"object"},"strict":true}}}`)
+	chat, names, err := toChat(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := arr(chat["messages"])
+	if len(messages) != 7 {
+		t.Fatalf("messages: %#v", messages)
+	}
+	a := obj(messages[3])
+	if len(arr(a["tool_calls"])) != 2 || a["reasoning_content"] != "consider" || a["content"] != "Checking" {
+		t.Fatalf("assistant: %#v", a)
+	}
+	alias := str(obj(obj(arr(chat["tools"])[0])["function"])["name"])
+	if names[alias].Namespace != "repo" {
+		t.Fatal(names)
+	}
+	if obj(obj(chat["response_format"])["json_schema"])["name"] != "result" {
+		t.Fatal(chat)
+	}
+	image := obj(arr(obj(messages[2])["content"])[1])
+	if obj(image["image_url"])["detail"] != "high" {
+		t.Fatal(image)
+	}
+}
+
+func TestRejectLossyInputs(t *testing.T) {
+	for _, s := range []string{
+		`{"previous_response_id":"r","input":[]}`,
+		`{"input":[{"type":"function_call_output","call_id":"missing","output":"hi"}]}`,
+		`{"input":[{"type":"function_call","name":"x","call_id":"c","arguments":"{}"}]}`,
+		`{"input":[{"role":"user","content":[{"type":"input_file","file_id":"file"}]}]}`,
+		`{"tools":[{"type":"computer_use"}]}`,
+	} {
+		if _, _, err := toChat(decode(t, s)); err == nil {
+			t.Fatalf("accepted %s", s)
+		}
+	}
+}
+
+func streamFixture(chunks ...string) string {
+	var b strings.Builder
+	for _, s := range chunks {
+		fmt.Fprintf(&b, ": heartbeat\r\ndata: %s\r\n\r\n", s)
+	}
+	return b.String()
+}
+
+func TestStreamToolsReasoningUsageAndReplay(t *testing.T) {
+	fixture := streamFixture(
+		`{"choices":[{"index":0,"delta":{"reasoning_content":"Think","content":"Hi"}}]}`,
+		`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"id":"c2","function":{"name":"apply_","arguments":"{\"input\":"}},{"index":0,"id":"c1","function":{"name":"read","arguments":"{"}}]}}]}`,
+		`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":1,"function":{"name":"patch","arguments":"\"patch\"}"}},{"index":0,"function":{"arguments":"}"}}]},"finish_reason":"tool_calls"}]}`,
+		`{"choices":[],"usage":{"prompt_tokens":12,"completion_tokens":8,"total_tokens":20,"prompt_tokens_details":{"cached_tokens":4},"completion_tokens_details":{"reasoning_tokens":3}}}`, `[DONE]`)
+	w := httptest.NewRecorder()
+	up := &http.Response{Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(fixture))}
+	err := translateResponse(w, up, true, "alias", toolMap{"read": {"read", "ns", false}, "apply_patch": {"apply_patch", "", true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []object
+	if err = readSSE(w.Body, func(b []byte) error {
+		var e object
+		if err := json.Unmarshal(b, &e); err != nil {
+			return err
+		}
+		events = append(events, e)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for i, e := range events {
+		if int(number(e["sequence_number"])) != i {
+			t.Fatal(e)
+		}
+	}
+	last := events[len(events)-1]
+	if last["type"] != "response.completed" {
+		t.Fatal(last)
+	}
+	response := obj(last["response"])
+	output := arr(response["output"])
+	if len(output) != 4 || obj(output[2])["namespace"] != "ns" || obj(output[3])["input"] != "patch" {
+		t.Fatal(output)
+	}
+	if obj(response["usage"])["total_tokens"] != float64(20) {
+		t.Fatal(response)
+	}
+	replay := append(output, object{"type": "function_call_output", "call_id": "c1", "output": "contents"}, object{"type": "custom_tool_call_output", "call_id": "c2", "output": "patched"})
+	chat, _, err := toChat(object{"input": replay})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := obj(arr(chat["messages"])[0])
+	if a["reasoning_content"] != "Think" || len(arr(a["tool_calls"])) != 2 {
+		t.Fatal(chat)
+	}
+}
+
+func TestIncompleteStreamCannotExecuteTool(t *testing.T) {
+	for _, finish := range []string{"", `,"finish_reason":"length"`} {
+		fixture := streamFixture(`{"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"c","function":{"name":"run","arguments":"{}"}}]}`+finish+`}]}`, `[DONE]`)
+		w := httptest.NewRecorder()
+		up := &http.Response{Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(fixture))}
+		if err := translateResponse(w, up, true, "model", toolMap{"run": {"run", "", false}}); err == nil {
+			t.Fatal("accepted truncated stream")
+		}
+		if strings.Contains(w.Body.String(), `"type":"function_call"`) || !strings.Contains(w.Body.String(), "response.failed") {
+			t.Fatal(w.Body.String())
+		}
+	}
+}
+
+func TestNonStreamingProvider(t *testing.T) {
+	w := httptest.NewRecorder()
+	up := &http.Response{Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"choices":[{"message":{"role":"assistant","content":"OK"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2,"completion_tokens":1,"total_tokens":3}}`))}
+	if err := translateResponse(w, up, false, "alias", nil); err != nil {
+		t.Fatal(err)
+	}
+	if decode(t, w.Body.String())["status"] != "completed" {
+		t.Fatal(w.Body.String())
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestRoutesNeverLeakSubscriptionCredentials(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	config := `listen = "127.0.0.1:8787"
+[[models]]
+name = "custom"
+model = "remote-id"
+base_url = "https://provider.example/v1"
+api = "chat"
+api_key = "provider-secret"
+[models.params]
+temperature = 0.25
+[models.params.vendor]
+thinking = false
+`
+	if err := os.WriteFile(path, []byte(config), 0600); err != nil {
+		t.Fatal(err)
+	}
+	b := newBridge(path, "local-secret", object{"models": []any{object{"slug": "builtin"}}})
+	calls := 0
+	b.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		calls++
+		raw, _ := io.ReadAll(r.Body)
+		if r.URL.Host == "provider.example" {
+			if r.Header.Get("Authorization") != "Bearer provider-secret" || r.Header.Get("ChatGPT-Account-ID") != "" || r.Header.Get("X-Codex-Bridge-Token") != "" {
+				t.Fatalf("leaked headers: %v", r.Header)
+			}
+			body := decode(t, string(raw))
+			if body["model"] != "remote-id" || body["temperature"] != 0.25 || obj(body["vendor"])["thinking"] != false {
+				t.Fatal(body)
+			}
+		} else {
+			if r.URL.String() != "https://chatgpt.com/backend-api/codex/responses" || r.Header.Get("Authorization") != "Bearer subscription-secret" || r.Header.Get("ChatGPT-Account-ID") != "account" || r.Header.Get("X-Codex-Bridge-Token") != "" {
+				t.Fatalf("wrong subscription route: %v %v", r.URL, r.Header)
+			}
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"choices":[{"message":{"content":"OK"},"finish_reason":"stop"}]}`))}, nil
+	})
+	for _, model := range []string{"custom", "builtin"} {
+		req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"`+model+`","input":"hi"}`))
+		req.Header.Set("X-Codex-Bridge-Token", "local-secret")
+		req.Header.Set("Authorization", "Bearer subscription-secret")
+		req.Header.Set("ChatGPT-Account-ID", "account")
+		w := httptest.NewRecorder()
+		b.ServeHTTP(w, req)
+		if w.Code != 200 {
+			t.Fatal(w.Code, w.Body.String())
+		}
+	}
+	if calls != 2 {
+		t.Fatal(calls)
+	}
+	for _, origin := range []string{"", "https://evil.example"} {
+		req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"custom"}`))
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+			req.Header.Set("X-Codex-Bridge-Token", "local-secret")
+		}
+		w := httptest.NewRecorder()
+		b.ServeHTTP(w, req)
+		if w.Code != 401 && w.Code != 403 {
+			t.Fatal(w.Code)
+		}
+	}
+	if calls != 2 {
+		t.Fatal("unauthorized upstream request")
+	}
+}
+
+func TestConfigEditPreservesUnrelatedSettings(t *testing.T) {
+	original := []byte("# user comment\nmodel_provider = '''original''' # trailing\nmodel_catalog_json = \"/tmp/models\"\nmodel = \"gpt-5.5\"\n[projects.\"/tmp/x\"]\ntrust_level = \"trusted\"\n")
+	got, values, err := removeRootStrings(original, map[string]bool{"model_provider": true, "model_catalog_json": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["model_provider"] != "original" || values["model_catalog_json"] != "/tmp/models" {
+		t.Fatal(values)
+	}
+	var parsed object
+	if err = toml.Unmarshal(got, &parsed); err != nil {
+		t.Fatal(err, string(got))
+	}
+	if parsed["model"] != "gpt-5.5" || !bytes.Contains(got, []byte("# trailing")) {
+		t.Fatal(string(got))
+	}
+}
+
+func TestConfigValidation(t *testing.T) {
+	for _, contents := range []string{`listen="0.0.0.0:8787"`, `listen="localhost:8787"`, `unknown=true`, `[[models]]
+name="x"
+base_url="https://user:pass@example.com"
+api="chat"`, `[[models]]
+name="x"
+base_url="https://example.com/v1"
+api="chat"
+[models.params]
+stream=false`} {
+		p := filepath.Join(t.TempDir(), "config")
+		_ = os.WriteFile(p, []byte(contents), 0600)
+		if _, err := loadConfig(p); err == nil {
+			t.Fatalf("accepted %s", contents)
+		}
+	}
+}
+
+func TestSyncIdempotentAndUnsyncPreservesUserEdits(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("CODEX_HOME", dir)
+	bin := filepath.Join(t.TempDir(), "codex")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nprintf '%s' '{\"models\":[{\"slug\":\"builtin\",\"model_messages\":{\"instructions_template\":\"instructions\"}}]}'\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", filepath.Dir(bin)+":"+os.Getenv("PATH"))
+	target := filepath.Join(dir, "config.toml")
+	original := "# keep this comment\nmodel_provider = 'prior'\nmodel = 'builtin'\n[model_providers.prior]\nname = 'Prior'\nbase_url = 'https://example.com/v1'\n"
+	if err := os.WriteFile(target, []byte(original), 0600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(dir, "bridge.toml")
+	c := Config{Listen: "127.0.0.1:8787", Models: []Model{{Name: "custom", Model: "remote", API: "chat", ContextWindow: 32768}}}
+	if err := syncCodex(configPath, c); err != nil {
+		t.Fatal(err)
+	}
+	first, _ := os.ReadFile(target)
+	if err := syncCodex(configPath, c); err != nil {
+		t.Fatal(err)
+	}
+	second, _ := os.ReadFile(target)
+	if !bytes.Equal(first, second) {
+		t.Fatal("sync changes config on every invocation")
+	}
+	if err := os.WriteFile(target, append(second, []byte("\n[projects.\"/new\"]\ntrust_level = 'trusted'\n")...), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := unsyncCodex(); err != nil {
+		t.Fatal(err)
+	}
+	result, _ := os.ReadFile(target)
+	var parsed object
+	if err := toml.Unmarshal(result, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed["model_provider"] != "prior" || obj(obj(parsed["projects"])["/new"])["trust_level"] != "trusted" || !bytes.Contains(result, []byte("# keep this comment")) {
+		t.Fatal(string(result))
+	}
+}
+
+func TestResponsesPassthroughAndAuthErrors(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "config.toml")
+	config := []byte("[[models]]\nname='native'\nmodel='remote'\napi='responses'\nbase_url='https://provider.example/v1'\napi_key_env='BRIDGE_TEST_KEY'\n[models.params]\ntemperature=0.7\n")
+	if err := os.WriteFile(p, config, 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BRIDGE_TEST_KEY", "test-secret")
+	b := newBridge(p, "local", object{})
+	for _, status := range []int{200, 401, 302} {
+		b.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			raw, _ := io.ReadAll(r.Body)
+			body := decode(t, string(raw))
+			if r.URL.Path != "/v1/responses" || body["model"] != "remote" || body["input"] != "question" || body["temperature"] != 0.7 || r.Header.Get("Authorization") != "Bearer test-secret" {
+				t.Fatal(r.URL, body)
+			}
+			return &http.Response{StatusCode: status, Header: http.Header{"Content-Type": []string{"text/event-stream"}}, Body: io.NopCloser(strings.NewReader("data: test-secret\n\n"))}, nil
+		})
+		r := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"native","input":"question","stream":true}`))
+		r.Header.Set("X-Codex-Bridge-Token", "local")
+		w := httptest.NewRecorder()
+		b.ServeHTTP(w, r)
+		if status == 200 {
+			if w.Body.String() != "data: test-secret\n\n" {
+				t.Fatal(w.Body.String())
+			}
+		} else if w.Code != 502 || strings.Contains(w.Body.String(), "test-secret") {
+			t.Fatal(w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestSwitchToResponsesKeepsReasoningWithoutDanglingIDs(t *testing.T) {
+	req := decode(t, `{"input":[{"type":"reasoning","id":"rs_bridge_123","summary":[{"type":"summary_text","text":"Useful thought"}]},{"type":"message","id":"msg_bridge_456","role":"assistant","content":[{"type":"output_text","text":"Answer"}]},{"type":"reasoning","id":"rs_openai","encrypted_content":"opaque","summary":[]},{"type":"function_call","id":"fc_bridge_789","call_id":"call_123","name":"read","arguments":"{}"}]}`)
+	normalizeResponsesInput(req)
+	input := arr(req["input"])
+	if obj(input[0])["type"] != "message" || !strings.Contains(str(obj(arr(obj(input[0])["content"])[0])["text"]), "Useful thought") {
+		t.Fatal(input)
+	}
+	if obj(input[1])["id"] != nil || obj(input[2])["encrypted_content"] != "opaque" || obj(input[3])["id"] != nil || obj(input[3])["call_id"] != "call_123" {
+		t.Fatal(input)
+	}
+}
+
+func TestProviderURLs(t *testing.T) {
+	for _, tc := range []struct{ base, suffix, want string }{
+		{"https://example.com/api/v1?api-version=1", "/chat/completions", "https://example.com/api/v1/chat/completions?api-version=1"},
+		{"https://example.com/v1/chat/completions", "/chat/completions", "https://example.com/v1/chat/completions"},
+		{"https://example.com/v1/responses?version=2", "/responses/compact", "https://example.com/v1/responses/compact?version=2"},
+	} {
+		if got := endpointURL(tc.base, tc.suffix); got != tc.want {
+			t.Fatalf("got %s, want %s", got, tc.want)
+		}
+	}
+}

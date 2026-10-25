@@ -1,0 +1,36 @@
+Verification — 2026-10-25 UTC
+
+Environment: Debian trixie-slim, Codex CLI 0.164.0, Linux amd64.
+Final binary SHA-256: 285a27027b5ba65e3d03f36aecf8ecb35e7b2aea9691d6c39d962562c7db8e13
+
+PASS go test -race ./...
+PASS go vet ./...
+PASS docker build -t codex-bridge:proof .
+PASS final image: Codex 0.164.0 and Node 22.23.4 start.
+PASS final image: init, edit via EDITOR, sync, start, status, unsync, stop.
+PASS running lab: status and stop work after invalidating the TOML config.
+PASS repeated start reuses the running service; repeated sync is byte-identical.
+PASS interactive /model picker lists external models alongside subscription models.
+PASS Qwen creates arithmetic.py and test_arithmetic.py, runs 3 passing Python tests.
+PASS Qwen applies a patch through Codex's apply_patch tool and reads the file back.
+PASS DeepSeek emits reasoning, executes a Python shell command, consumes its result.
+
+Final live Codex app-server test (one thread, no profile changes):
+Model picker includes external and subscription models
+PASS a0-qwen: same thread 01a17343-103a-7de1-b189-3c079b3a6122, marker preserved, 1 completed tools
+PASS a0-deepseek: same thread 01a17343-103a-7de1-b189-3c079b3a6122, marker preserved, 1 completed tools
+PASS gpt-6-luna: same thread 01a17343-103a-7de1-b189-3c079b3a6122, marker preserved, 1 completed tools
+PASS a0-qwen: same thread 01a17343-103a-7de1-b189-3c079b3a6122, marker preserved, 1 completed tools
+PASS model switching without profiles
+
+The final smoke test creates marker.txt via apply_patch, then each subsequent model
+reads it with a real tool. The user's ChatGPT login was used for GPT-6-Luna.
+
+Observed limits:
+- GPT-6.1-Sol returned upstream turn_rate_limit_exceeded (capacity); a minimal
+  subscription request through the bridge completed, but full Codex turns did not.
+- GPT-5.5 was in the bundled catalog but the account endpoint rejected it.
+- The supplied gateway's /v1/models returned 400 Missing model ID. Model IDs were
+  obtained from Venice's public catalog, then tested against the supplied gateway.
+- Images, JSON schemas, and generic Responses passthrough were checked with fixtures;
+  no claim is made that every provider, model, or Responses-only feature was tested.
