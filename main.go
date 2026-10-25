@@ -33,8 +33,9 @@ func run(args []string) error {
 	}
 	fs := flag.NewFlagSet("codex-bridge", flag.ContinueOnError)
 	path := fs.String("config", filepath.Join(dir, "codex-bridge", "config.yaml"), "YAML config file")
+	force := fs.Bool("force", false, "with sync, restart the shared Codex server immediately (may interrupt active work)")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: codex-bridge [--config FILE] init|edit|sync|unsync|start|stop|status|serve\n\ninit     Create an example config\nedit     Open config in $VISUAL / $EDITOR, or detect an installed terminal editor\nsync     Add models to Codex /model (restart Codex afterward)\nunsync   Restore previous Codex provider settings\nstart    Start proxy in background\nstop     Stop proxy gracefully\nstatus   Show proxy health, model count, and Codex sync status\nserve    Run in foreground (Ctrl-C stops)")
+		fmt.Fprintln(fs.Output(), "Usage: codex-bridge [--config FILE] init|edit|sync|unsync|start|stop|status|serve\n\ninit     Create an example config\nedit     Open config in $VISUAL / $EDITOR, or detect an installed terminal editor\nsync     Write Codex model settings and show how to reload them\nunsync   Restore previous Codex provider settings\nstart    Start proxy in background\nstop     Stop proxy gracefully\nstatus   Show proxy health, model count, and Codex sync status\nserve    Run in foreground (Ctrl-C stops)")
 		fs.PrintDefaults()
 	}
 	if err = fs.Parse(args); err != nil {
@@ -43,15 +44,27 @@ func run(args []string) error {
 		}
 		return err
 	}
-	if fs.NArg() != 1 {
+	if fs.NArg() < 1 {
 		fs.Usage()
 		return fmt.Errorf("expected one command")
+	}
+	command := fs.Arg(0)
+	if err = fs.Parse(fs.Args()[1:]); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("expected one command")
+	}
+	if *force && command != "sync" {
+		return fmt.Errorf("--force is only supported with sync")
 	}
 	*path, err = filepath.Abs(*path)
 	if err != nil {
 		return err
 	}
-	command := fs.Arg(0)
 	if command == "init" {
 		if err = os.MkdirAll(filepath.Dir(*path), 0700); err != nil {
 			return err
@@ -100,7 +113,7 @@ func run(args []string) error {
 		return err
 	}
 	if command == "sync" {
-		return withLock(filepath.Join(codexDir(), ".codex-bridge.lock"), func() error { return syncCodex(*path, c) })
+		return withLock(filepath.Join(codexDir(), ".codex-bridge.lock"), func() error { return syncCodex(*path, c, *force) })
 	}
 	token, err := localToken(*path)
 	if err != nil {
@@ -153,9 +166,11 @@ func printStatus(path string, c Config, configErr error) error {
 	if reason := codexSyncStatus(path, c); reason != "" {
 		fmt.Println("Codex sync: unsynced (" + reason + ")")
 	} else {
-		fmt.Println("Codex sync: synced")
+		fmt.Println("Codex sync: synced (config files on disk)")
 	}
 	fmt.Println("Codex config:", filepath.Join(codexDir(), "config.toml"))
+	fmt.Println("Codex daemon:", codexDaemonStatus())
+	fmt.Println(codexReloadHint)
 	if err != nil {
 		return fmt.Errorf("proxy is not running or unreachable: %w", err)
 	}

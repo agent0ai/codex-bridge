@@ -20,6 +20,8 @@ const rootEnd = "# END codex-bridge settings\n"
 const providerBegin = "# BEGIN codex-bridge provider\n"
 const providerEnd = "# END codex-bridge provider\n"
 
+const codexReloadHint = "Load the current config now: codex --no-daemon\nFor normal codex, finish active turns, run codex app-server daemon restart, then reopen Codex.\nRestarting only the terminal does not refresh an existing shared server's model catalog."
+
 func stripBlock(b []byte, begin, end string) ([]byte, error) {
 	i := bytes.Index(b, []byte(begin))
 	if i < 0 {
@@ -154,7 +156,7 @@ func sameJSON(a, b any) bool {
 	return errA == nil && errB == nil && bytes.Equal(x, y)
 }
 
-// Compare the settings on disk; an already-open Codex session keeps its startup catalog.
+// Compare files only; Codex's shared server retains its startup catalog across TUI restarts.
 func codexSyncStatus(path string, c Config) string {
 	dir := codexDir()
 	raw, err := os.ReadFile(filepath.Join(dir, "config.toml"))
@@ -198,7 +200,27 @@ func codexSyncStatus(path string, c Config) string {
 	return ""
 }
 
-func syncCodex(path string, c Config) error {
+func codexDaemonStatus() string {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	raw, err := exec.CommandContext(ctx, "codex", "app-server", "daemon", "version").Output()
+	var result struct {
+		Status string `json:"status"`
+	}
+	if err != nil || json.Unmarshal(raw, &result) != nil {
+		return "unknown (could not inspect shared server)"
+	}
+	switch result.Status {
+	case "running":
+		return "running (in-memory model catalog not verified)"
+	case "notRunning":
+		return "not running (new sessions load the current config)"
+	default:
+		return "unknown (could not inspect shared server)"
+	}
+}
+
+func syncCodex(path string, c Config, force bool) error {
 	dir := codexDir()
 	target := filepath.Join(dir, "config.toml")
 	catalogPath := filepath.Join(dir, "codex-bridge-models.json")
@@ -282,7 +304,20 @@ func syncCodex(path string, c Config) error {
 	if err = atomicWrite(target, next); err != nil {
 		return err
 	}
-	fmt.Printf("Synced %d external models plus %d built-in models to %s.\nRestart open Codex sessions; external models appear first in /model.\n", len(c.Models), len(arr(base["models"])), target)
+	fmt.Printf("Synced %d external models plus %d built-in models to %s (on disk).\n", len(c.Models), len(arr(base["models"])), target)
+	if force {
+		fmt.Println("Restarting the shared Codex server; active work may be interrupted.")
+		ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
+		defer cancel()
+		cmd := exec.CommandContext(ctx, "codex", "app-server", "daemon", "restart")
+		cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+		if err := cmd.Run(); err != nil {
+			return fmt.Errorf("config synced on disk, but Codex server restart failed: %w\nUse codex --no-daemon to load the current config", err)
+		}
+		fmt.Println("Codex server restarted. Reopen Codex; external models appear first in /model.")
+		return nil
+	}
+	fmt.Println(codexReloadHint)
 	return nil
 }
 
@@ -328,5 +363,6 @@ func unsyncCodex() error {
 		return err
 	}
 	fmt.Println("Restored previous provider settings; unrelated Codex settings preserved.")
+	fmt.Println(codexReloadHint)
 	return nil
 }

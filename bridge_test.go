@@ -351,6 +351,95 @@ func TestYAMLAndLegacyConfigPreserveValues(t *testing.T) {
 	}
 }
 
+func TestCodexDaemonStatus(t *testing.T) {
+	for _, tc := range []struct{ response, want string }{
+		{`{"status":"running"}`, "running (in-memory model catalog not verified)"},
+		{`{"status":"notRunning"}`, "not running (new sessions load the current config)"},
+		{`{"status":"unexpected"}`, "unknown (could not inspect shared server)"},
+		{`invalid JSON`, "unknown (could not inspect shared server)"},
+	} {
+		t.Run(tc.response, func(t *testing.T) {
+			bin := filepath.Join(t.TempDir(), "codex")
+			script := "#!/bin/sh\n[ \"$*\" = 'app-server daemon version' ] || exit 1\nprintf '%s' '" + tc.response + "'\n"
+			if err := os.WriteFile(bin, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", filepath.Dir(bin))
+			if got := codexDaemonStatus(); got != tc.want {
+				t.Fatalf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+	t.Setenv("PATH", t.TempDir())
+	if got := codexDaemonStatus(); got != "unknown (could not inspect shared server)" {
+		t.Fatal("missing CLI reported as a stopped daemon:", got)
+	}
+}
+
+func TestSyncForce(t *testing.T) {
+	for _, mode := range []string{"normal", "force after command", "force before command", "restart failure", "invalid config"} {
+		t.Run(mode, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("CODEX_HOME", dir)
+			bin := filepath.Join(dir, "codex")
+			script := `#!/bin/sh
+case "$*" in
+  'debug models --bundled') printf '%s' '{"models":[{"slug":"builtin"}]}' ;;
+  'app-server daemon restart')
+    test -f "$CODEX_HOME/codex-bridge-models.json" || exit 1
+    printf restarted > "$CODEX_HOME/restart-called"
+    exit "${RESTART_EXIT:-0}" ;;
+  *) exit 1 ;;
+esac
+`
+			if err := os.WriteFile(bin, []byte(script), 0700); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", dir)
+			t.Setenv("RESTART_EXIT", "0")
+			path := filepath.Join(dir, "bridge.yaml")
+			config := "models:\n  - name: custom\n    base_url: http://127.0.0.1:1/v1\n    api: chat\n"
+			if mode == "invalid config" {
+				config = "invalid: true\n"
+			}
+			if err := os.WriteFile(path, []byte(config), 0600); err != nil {
+				t.Fatal(err)
+			}
+			args := []string{"--config", path, "sync"}
+			if mode == "force before command" {
+				args = []string{"--force", "sync", "--config", path}
+			} else if mode != "normal" {
+				args = append(args, "--force")
+			}
+			if mode == "restart failure" {
+				t.Setenv("RESTART_EXIT", "42")
+			}
+			err := run(args)
+			if mode == "restart failure" {
+				if err == nil || !strings.Contains(err.Error(), "config synced on disk, but Codex server restart failed") {
+					t.Fatal("restart failure not reported accurately:", err)
+				}
+			} else if (err != nil) != (mode == "invalid config") {
+				t.Fatal("unexpected sync result:", err)
+			}
+			_, statErr := os.Stat(filepath.Join(dir, "restart-called"))
+			wantRestart := mode != "normal" && mode != "invalid config"
+			if (statErr == nil) != wantRestart {
+				t.Fatal("incorrect daemon restart behavior:", statErr)
+			}
+			if mode != "invalid config" {
+				c, err := loadConfig(path)
+				if err != nil || codexSyncStatus(path, c) != "" {
+					t.Fatal("sync did not leave valid settings on disk:", err)
+				}
+			}
+		})
+	}
+	if err := run([]string{"init", "--force"}); err == nil || !strings.Contains(err.Error(), "only supported with sync") {
+		t.Fatal("--force allowed outside sync:", err)
+	}
+}
+
 func TestSyncIdempotentAndUnsyncPreservesUserEdits(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("CODEX_HOME", dir)
@@ -369,11 +458,11 @@ func TestSyncIdempotentAndUnsyncPreservesUserEdits(t *testing.T) {
 	if codexSyncStatus(configPath, c) == "" {
 		t.Fatal("reported synced before sync")
 	}
-	if err := syncCodex(configPath, c); err != nil {
+	if err := syncCodex(configPath, c, false); err != nil {
 		t.Fatal(err)
 	}
 	first, _ := os.ReadFile(target)
-	if err := syncCodex(configPath, c); err != nil {
+	if err := syncCodex(configPath, c, false); err != nil {
 		t.Fatal(err)
 	}
 	second, _ := os.ReadFile(target)

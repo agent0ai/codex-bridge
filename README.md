@@ -12,15 +12,18 @@ The running container is `codex-bridge-lab`. It has Codex, the bridge, three ext
 docker exec -it codex-bridge-lab bash
 codex-bridge status
 cd /work
-codex
+codex --no-daemon
 ```
 
-Inside Codex, enter `/model` and select `a0-qwen`, `a0-deepseek`, `a0-vision`, or a subscription model such as `GPT-6-Luna`. External models appear first, in config order. To start with a specific external model, use `codex -m a0-qwen`.
+Inside Codex, enter `/model` and select `a0-qwen`, `a0-deepseek`, `a0-vision`, or a subscription model such as `GPT-6-Luna`. External models appear first, in config order. To start with a specific external model, use `codex --no-daemon -m a0-qwen`.
 
 ```bash
 codex-bridge edit       # $VISUAL, then $EDITOR, then automatic editor detection
-codex-bridge sync       # validate config and update the model picker
-# Exit and reopen Codex after sync to load the new catalog.
+codex-bridge sync       # validate config and write the model catalog
+codex --no-daemon       # load the current config without using the shared server
+# Or, to use normal codex (this may interrupt active shared-server work):
+codex-bridge sync --force
+codex
 codex-bridge stop
 codex-bridge start
 ```
@@ -51,7 +54,7 @@ export AGENT_ZERO_API_KEY
 codex-bridge start
 codex-bridge sync
 codex login             # only if you have not already logged in
-codex
+codex --no-daemon
 ```
 
 The bridge uses Codex's existing subscription authentication and refresh logic. It never modifies `auth.json` or logs credentials. A subscription login is required for the normal mixed subscription/external setup. For external-only use without signing in, launch `codex -c model_providers.codex-bridge.requires_openai_auth=false -m a0-qwen`.
@@ -90,6 +93,7 @@ Changing `context_window` does not enlarge the provider's real context limit. Se
 | `init` | Create the example config with private permissions; never overwrite an existing file. |
 | `edit` | Open the config with your terminal editor. |
 | `sync` | Validate config, generate a version-matched model catalog, and select the local bridge provider. |
+| `sync --force` | Sync, then immediately invoke `codex app-server daemon restart`; active work may be interrupted. |
 | `start` | Start one background proxy; repeated starts reuse the running instance. |
 | `stop` | Stop the listener and allow active requests up to ten seconds to finish. |
 | `status` | Show proxy health, configured model count, and whether Codex's provider/catalog match the bridge. |
@@ -98,14 +102,20 @@ Changing `context_window` does not enlarge the provider's real context limit. Se
 
 `sync` writes `$CODEX_HOME/config.toml` and `codex-bridge-models.json` (normally under `~/.codex`). It preserves unrelated settings and comments, creates `config.toml.bridge-backup`, and is idempotent. It refuses to overwrite an existing unmanaged `codex-bridge` provider or a separate custom model catalog. Profiles are never created. Model aliases must not collide with built-in model names.
 
-`status` compares the current provider, local token, listen address, and complete model catalog against the expected settings. It reports `synced` or `unsynced` with a reason. Changing API keys or upstream parameters does not require sync; changing model metadata does. The check is read-only and describes the base Codex config on disk, not an already-open session or separate profile/command-line override. Restart open Codex sessions after sync to reload the catalog.
+Codex 0.164.0 can reconnect new terminals to an existing shared background server. That server keeps its startup model catalog, so **closing and reopening the terminal does not refresh it**. Use `codex --no-daemon` to load the synced files immediately, or run `codex-bridge sync --force` and reopen Codex. The force option restarts the shared server through Codex's own daemon command, which may interrupt active work and takes time to shut down gracefully. Normal `sync` never restarts it. If restarting fails, the command exits with an error and clearly reports that the files were still synced.
+
+`status` compares the current provider, local token, listen address, and complete model catalog against the expected settings. It reports `synced` or `unsynced` with a reason and labels this as an on-disk check. It also reports whether the shared daemon is running; its in-memory catalog is not verified. Changing API keys or upstream parameters does not require sync; changing model metadata does. The check is read-only and does not inspect separate profiles or command-line overrides.
 
 ```text
 Running at http://127.0.0.1:8787
 Config: /root/.config/codex-bridge/config.yaml
 Models: 1 external
-Codex sync: synced
+Codex sync: synced (config files on disk)
 Codex config: /root/.codex/config.toml
+Codex daemon: running (in-memory model catalog not verified)
+Load the current config now: codex --no-daemon
+For normal codex, finish active turns, run codex app-server daemon restart, then reopen Codex.
+Restarting only the terminal does not refresh an existing shared server's model catalog.
 ```
 
 All selected models go through the proxy while synced, so keep it running. To return to your original setup:
@@ -113,7 +123,8 @@ All selected models go through the proxy while synced, so keep it running. To re
 ```bash
 codex-bridge unsync
 codex-bridge stop
-# Restart Codex. If you last selected an external alias, choose a built-in model.
+# Use codex --no-daemon, or restart the shared server and reopen Codex.
+# If you last selected an external alias, choose a built-in model.
 ```
 
 The proxy binds only to a loopback IP and requires a random local token written by `sync`. Browser-origin requests are rejected. Third-party requests are built with only that model's credentials; subscription headers are sent only to fixed OpenAI destinations. HTTP redirects are not followed for third-party requests. Logs contain model, status, and timing rather than prompts or keys. The log is next to the config as `config.yaml.log`.
@@ -170,6 +181,8 @@ The supplied gateway replaces `prompt_cache_key` with its own stable account key
 ```bash
 go test -race ./...
 go vet ./...
+# Real terminal picker regression; isolated daemon, dummy key, no model requests:
+python3 tests/picker.py
 docker build -t codex-bridge:proof .
 docker run -d --name my-codex-bridge --init codex-bridge:proof
 docker exec -it my-codex-bridge bash
@@ -191,6 +204,8 @@ docker exec codex-bridge-lab python3 /opt/bridge-cache.py --model a0-qwen --repo
 docker exec codex-bridge-lab python3 /opt/bridge-cache.py --model a0-deepseek --report /tmp/cache-deepseek.json
 ```
 
-Unit tests cover translation, fragmented parallel tool calls, custom tools, reasoning, attachments, cache controls and accounting, stable prompt prefixes, JSON schemas, truncated streams, credential separation, native Responses forwarding, URL handling, validation, and sync/unsync preservation. Live tests cover Qwen file edits and Python tests, DeepSeek reasoning and shell tools, image and file attachments, cache reuse, the interactive picker, and switching external/subscription models within one thread. See [verification.txt](verification.txt) for the recorded results.
+The picker regression requires a complete packaged Codex 0.164.0 installation for daemon management; pass `--codex /path/to/package/bin/codex` if your default CLI is a standalone binary. It reproduces a stale catalog after normal sync, checks `--no-daemon`, then checks that `sync --force` makes the external model appear first in a normal terminal session. It uses a temporary `CODEX_HOME` and leaves existing servers alone.
+
+Unit tests cover translation, fragmented parallel tool calls, custom tools, reasoning, attachments, cache controls and accounting, stable prompt prefixes, JSON schemas, truncated streams, credential separation, native Responses forwarding, URL handling, validation, sync/unsync preservation, force restart, and restart failures. Live tests cover Qwen file edits and Python tests, DeepSeek reasoning and shell tools, image and file attachments, cache reuse, the interactive picker, and switching external/subscription models within one thread. See [verification.txt](verification.txt) for the recorded results.
 
 Implementation references: [Codex configuration](https://learn.chatgpt.com/docs/config-file/config-reference), [Codex v0.164.0 source](https://github.com/openai/codex/tree/rust-v0.164.0), and [MetaFARS/codex-relay](https://github.com/MetaFARS/codex-relay) (translation edge cases). The supplied gateway's `/v1/models` returned `400 Missing model ID`; tested IDs were obtained from [Venice's model catalog](https://docs.venice.ai/models/overview).

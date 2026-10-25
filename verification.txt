@@ -87,3 +87,21 @@ PASS rebuilt Debian image: init/edit/sync/start/status/unsync/status/stop.
 PASS YAML live Codex cache test: stable request prefix and exact input/cached/output accounting.
 Latest warm cache ratio was 36.28% (0%, 35.96%, 72.85% across follow-up turns); raw usage is in cache-verification.json.
 Host api_key is still an example placeholder, resulting in upstream 401 Invalid A0 API key; migration preserved it. Lab test credentials worked.
+
+Shared-server catalog and force sync — 2026-10-25 UTC
+SHA-256: 1267a722744fb6cc41fc42d539859ef650e47b194024fa28fd138bd1729d67f7
+Correction: earlier fresh model/list checks did not cover an existing shared daemon.
+Reproduced the user's real terminal picker: normal Codex showed only built-in models
+despite correctly synced files; codex --no-daemon showed a0-glm-5-3 first.
+Codex 0.164.0 retains the shared server's startup catalog across TUI restarts.
+PASS go test -race ./... and go vet ./...
+PASS force flag before/after the command, normal sync does not restart, invalid config
+does not restart, and failed restart reports that disk sync still succeeded.
+PASS daemon status reports unknown on missing/invalid CLI output, not stopped/synced.
+PASS tests/picker.py with a temporary CODEX_HOME, dummy key, and real PTY sessions:
+  normal sync reproduces the stale picker;
+  --no-daemon shows the external model first;
+  sync --force restarts the isolated daemon and the normal picker shows it first.
+Installed matching binaries in /root/.local/bin, /usr/local/bin, and codex-bridge-lab.
+The user's active shared server was not restarted. No inference requests were sent;
+attachment and cache tests were not repeated for this CLI-only change.
