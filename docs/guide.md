@@ -35,13 +35,15 @@ Routing and body parameter changes are loaded on the next request. Restart the p
 Install Codex CLI 0.164.0 and Go 1.24.4 or newer, then:
 
 ```bash
-go build -trimpath -ldflags='-s -w' -o codex-bridge .
+go build -trimpath -ldflags="-s -w -X main.version=$(git describe --tags --always --dirty)" -o codex-bridge .
 mkdir -p ~/.local/bin
 install -m 755 codex-bridge ~/.local/bin/codex-bridge
 codex-bridge edit       # creates the initial config if missing
 ```
 
 Put `~/.local/bin` on your `PATH`. The default config is `$XDG_CONFIG_HOME/codex-bridge/config.yaml` on Linux (normally `~/.config/codex-bridge/config.yaml`). The proxy also supports an explicit file: `codex-bridge --config /path/models.yaml start`. Legacy `.toml` files remain readable when passed explicitly with `--config`. Codex's own `~/.codex/config.toml` still uses TOML.
+
+`codex-bridge --version` prints the binary's build version without requiring a config. `status` also shows this version. Release builds embed their Git tag; builds without `-X main.version=...` report `dev`.
 
 `init` creates the example config; `edit` automatically does this when the file is missing, then opens it. Existing configs are preserved, including invalid configs that need fixing. `start` and `sync` require an existing config and never create one automatically.
 
@@ -115,6 +117,7 @@ Codex 0.164.0 can reconnect new terminals to an existing shared background serve
 The query is read-only: it does not start/restart Codex or send inference requests. It follows pagination and has a ten-second deadline for the server check. Changing API keys or upstream parameters does not require sync; changing model metadata does. The API exposes picker metadata, not all internal settings such as retained context limits or provider credentials. Separate profiles, command-line overrides, and upstream model access are outside this check.
 
 ```text
+Version: v0.1.1
 Running at http://127.0.0.1:8787
 Config: /root/.config/codex-bridge/config.yaml
 Models: 1 external
@@ -187,7 +190,7 @@ go test -race ./...
 go vet ./...
 # Real terminal picker regression; isolated daemon, dummy key, no model requests:
 python3 tests/picker.py
-docker build -t codex-bridge:proof .
+docker build --build-arg VERSION="$(git describe --tags --always --dirty)" -t codex-bridge:proof .
 docker run -d --name my-codex-bridge --init codex-bridge:proof
 docker exec -it my-codex-bridge bash
 # Run init/edit/start/sync and codex login inside this new container.

@@ -3,7 +3,8 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY *.go config.example.yaml ./
-RUN CGO_ENABLED=0 go test ./... && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /codex-bridge .
+ARG VERSION=dev
+RUN CGO_ENABLED=0 go test ./... && CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /codex-bridge .
 
 FROM node:22-bookworm-slim AS codex
 ARG CODEX_VERSION=0.164.0

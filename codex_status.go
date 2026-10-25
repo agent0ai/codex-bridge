@@ -91,7 +91,7 @@ func codexModels(ctx context.Context, socket string) ([]object, error) {
 		}
 	}
 	var initialized object
-	if err := request("initialize", object{"clientInfo": object{"name": "codex_bridge", "version": "0.1.0"}}, &initialized); err != nil {
+	if err := request("initialize", object{"clientInfo": object{"name": "codex_bridge", "version": version}}, &initialized); err != nil {
 		return nil, err
 	}
 	if err := wsjson.Write(ctx, conn, object{"method": "initialized"}); err != nil {

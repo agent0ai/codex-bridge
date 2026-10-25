@@ -44,8 +44,13 @@ jobs:
         run: |
           test "$(go env GOARCH)" = "$ARCH"
           mkdir -p release
-          CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" go build -trimpath -ldflags='-s -w' -o "release/codex-bridge-linux-$ARCH" .
+          CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" go build -trimpath -ldflags="-s -w -X main.version=$TAG" -o "release/codex-bridge-linux-$ARCH" .
           "release/codex-bridge-linux-$ARCH" --help
+          test "$(env -u HOME -u XDG_CONFIG_HOME "release/codex-bridge-linux-$ARCH" --version)" = "codex-bridge $TAG"
+          if "release/codex-bridge-linux-$ARCH" --config "$RUNNER_TEMP/uninitialized.yaml" status > "$RUNNER_TEMP/status.txt" 2>/dev/null; then
+            exit 1
+          fi
+          grep -Fx "Version: $TAG" "$RUNNER_TEMP/status.txt"
       - uses: actions/upload-artifact@v4
         with:
           name: binary-${{ matrix.arch }}

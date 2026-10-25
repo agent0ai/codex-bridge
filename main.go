@@ -19,6 +19,8 @@ import (
 //go:embed config.example.yaml
 var example []byte
 
+var version = "dev"
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "codex-bridge:", err)
@@ -27,22 +29,25 @@ func main() {
 }
 
 func run(args []string) error {
-	dir, err := os.UserConfigDir()
-	if err != nil {
-		return err
-	}
+	dir, configDirErr := os.UserConfigDir()
 	fs := flag.NewFlagSet("codex-bridge", flag.ContinueOnError)
 	path := fs.String("config", filepath.Join(dir, "codex-bridge", "config.yaml"), "YAML config file")
 	force := fs.Bool("force", false, "with sync, restart the shared Codex server immediately (may interrupt active work)")
+	showVersion := fs.Bool("version", false, "Print the build version")
 	fs.Usage = func() {
 		fmt.Fprintln(fs.Output(), "Usage: codex-bridge [--config FILE] init|edit|sync|unsync|start|stop|status|serve\n\ninit     Create an example config\nedit     Create config if missing, then open $VISUAL / $EDITOR or a detected editor\nsync     Write Codex model settings and show how to reload them\nunsync   Restore previous Codex provider settings\nstart    Start proxy in background\nstop     Stop proxy gracefully\nstatus   Show proxy health, model count, and Codex sync status\nserve    Run in foreground (Ctrl-C stops)")
 		fs.PrintDefaults()
 	}
-	if err = fs.Parse(args); err != nil {
+	err := fs.Parse(args)
+	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return nil
 		}
 		return err
+	}
+	if *showVersion {
+		fmt.Println("codex-bridge", version)
+		return nil
 	}
 	if fs.NArg() < 1 {
 		fs.Usage()
@@ -55,11 +60,18 @@ func run(args []string) error {
 		}
 		return err
 	}
+	if *showVersion {
+		fmt.Println("codex-bridge", version)
+		return nil
+	}
 	if fs.NArg() != 0 {
 		return fmt.Errorf("expected one command")
 	}
 	if *force && command != "sync" {
 		return fmt.Errorf("--force is only supported with sync")
+	}
+	if configDirErr != nil {
+		return configDirErr
 	}
 	*path, err = filepath.Abs(*path)
 	if err != nil {
@@ -134,6 +146,7 @@ func run(args []string) error {
 }
 
 func printStatus(path string, c Config, configErr error) error {
+	fmt.Println("Version:", version)
 	running := c
 	if address, err := os.ReadFile(path + ".running"); err == nil && validListen(string(address)) {
 		running.Listen = string(address)
