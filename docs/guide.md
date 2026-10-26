@@ -2,7 +2,7 @@
 
 A small Go proxy that puts OpenAI-compatible Chat Completions and Responses models in Codex CLI's `/model` picker, alongside your ChatGPT subscription. Switch models within a conversation; no profiles or patched Codex required.
 
-Proof of concept tested with **Codex CLI 0.164.0** on Debian Linux. YAML and TOML parsers plus a WebSocket client for checking Codex's loaded models; no database or JavaScript runtime for the proxy. The running proxy used about 15 MiB RSS during the initial live tests. Linux and macOS process APIs are used; Windows support is not implemented.
+Proof of concept using **Codex CLI 0.164.0**. Live inference was tested on Debian Linux; macOS verification covers native lifecycle and the Codex picker without inference (see [verification](../verification.txt)). YAML and TOML parsers plus a WebSocket client for checking Codex's loaded models; no database or JavaScript runtime for the proxy. The running proxy used about 15 MiB RSS during the initial Linux live tests. Windows support is not implemented.
 
 ## Ready-to-use test container
 
@@ -32,16 +32,17 @@ Routing and body parameter changes are loaded on the next request. Restart the p
 
 ## Install on your own machine
 
-Install Codex CLI 0.164.0 and Go 1.24.4 or newer, then:
+Install Codex CLI 0.164.0 and Go 1.24.4 or newer, then run in a source checkout on Linux or macOS (see the [README](../README.md) for downloads and cloning):
 
 ```bash
-go build -trimpath -ldflags="-s -w -X main.version=$(git describe --tags --always --dirty)" -o codex-bridge .
-install -Dm 755 codex-bridge "$HOME/.local/bin/codex-bridge"
+go build -trimpath -ldflags="-s -w -X main.version=$(git describe --tags --always --dirty)" -o codex-bridge . &&
+mkdir -p "$HOME/.local/bin" &&
+install -m 755 codex-bridge "$HOME/.local/bin/codex-bridge"
 export PATH="$HOME/.local/bin:$PATH"
 codex-bridge edit       # creates the initial config if missing
 ```
 
-Put the `export PATH` line in `~/.bashrc` (Bash) or `~/.zshrc` (Zsh) for future terminals. The default config is `$XDG_CONFIG_HOME/codex-bridge/config.yaml` on Linux (normally `~/.config/codex-bridge/config.yaml`). The proxy also supports an explicit file: `codex-bridge --config /path/models.yaml start`. Legacy `.toml` files remain readable when passed explicitly with `--config`. Codex's own `~/.codex/config.toml` still uses TOML.
+If needed, put the `export PATH` line in `~/.bashrc` (Bash) or `~/.zshrc` (Zsh, the macOS default) for future terminals. The default config is `$XDG_CONFIG_HOME/codex-bridge/config.yaml` on Linux (normally `~/.config/codex-bridge/config.yaml`), and `~/Library/Application Support/codex-bridge/config.yaml` on macOS. The proxy also supports an explicit file; quote paths with spaces, for example `codex-bridge --config "$HOME/Library/Application Support/codex-bridge/config.yaml" start`. Legacy `.toml` files remain readable when passed explicitly with `--config`. Codex's own `~/.codex/config.toml` still uses TOML.
 
 `codex-bridge --version` prints the binary's build version without requiring a config. `status` also shows this version. Release builds embed their Git tag; builds without `-X main.version=...` report `dev`.
 
@@ -200,9 +201,9 @@ No ports need publishing: Codex and the proxy share the container's loopback int
 
 ## GitHub releases
 
-Push a stable `vMAJOR.MINOR.PATCH` tag to `agent0ai/codex-bridge` to run the [release workflow](../.github/workflows/release.yml). Both native Linux jobs must pass tests and build a static binary before publication. The release contains `codex-bridge-linux-amd64`, `codex-bridge-linux-arm64`, `checksums.txt`, the MIT license, and third-party notices.
+The [build/release workflow](../.github/workflows/release.yml) verifies branch pushes without publishing. A stable `vMAJOR.MINOR.PATCH` tag additionally publishes a release after all four native Linux/macOS amd64/arm64 jobs pass tests and build binaries with CGO disabled. The Mac jobs also run the isolated lifecycle and real Codex picker regression. The prepared release assets are `codex-bridge-linux-amd64`, `codex-bridge-linux-arm64`, `codex-bridge-darwin-amd64` (Intel), `codex-bridge-darwin-arm64` (Apple Silicon), `checksums.txt` covering all four, the MIT license, and third-party notices.
 
-Release notes include commits since the previous stable tag. Assets are uploaded to a draft before publication; retries can complete a draft but cannot overwrite a published release. Older version tags do not replace the latest release used by the README's download links. The workflow uses GitHub's job token and needs no custom release secrets. The download URLs become available after the first successful tagged release.
+Release notes include commits since the previous stable tag. Assets are uploaded to a draft before publication; retries can complete a draft but cannot overwrite a published release. Older version tags do not replace the latest release used by the README's download links. The workflow uses GitHub's job token and needs no custom release secrets. Mac binaries have not yet been published; use the README's source build until a release containing those assets exists.
 
 ## Live provider checks
 
@@ -219,7 +220,7 @@ docker exec codex-bridge-lab python3 /opt/bridge-cache.py --model a0-qwen --repo
 docker exec codex-bridge-lab python3 /opt/bridge-cache.py --model a0-deepseek --report /tmp/cache-deepseek.json
 ```
 
-The picker regression requires a complete packaged Codex 0.164.0 installation for daemon management; pass `--codex /path/to/package/bin/codex` if your default CLI is a standalone binary. It reproduces a stale catalog after normal sync, checks `--no-daemon`, then checks that `sync --force` makes the external model appear first in a normal terminal session. It also checks live status before/after restart, stale image support for an existing alias, and the stopped-server result. It uses a temporary `CODEX_HOME` and leaves existing servers alone.
+The picker regression requires a complete packaged Codex 0.164.0 installation for daemon management; pass `--codex /path/to/package/bin/codex` if your default CLI is a standalone binary, and `--bridge /path/to/codex-bridge` to test a build. It checks the default config path with spaces, editor invocation, background start/repeated start/stop, and status. It reproduces a stale catalog after normal sync, checks `--no-daemon`, then checks that `sync --force` makes the external model appear first in a normal terminal session. It also checks live status before/after restart, stale image support for an existing alias, and the stopped-server result. It gives subprocesses a temporary home and `CODEX_HOME`, dummy credentials, and an offline provider; existing configs and servers are untouched.
 
 Unit tests cover translation, fragmented parallel tool calls, custom tools, reasoning, attachments, cache controls and accounting, stable prompt prefixes, JSON schemas, truncated streams, credential separation, native Responses forwarding, URL handling, validation, sync/unsync preservation, force restart, and restart failures. Live tests cover Qwen file edits and Python tests, DeepSeek reasoning and shell tools, image and file attachments, cache reuse, the interactive picker, and switching external/subscription models within one thread. See [verification.txt](../verification.txt) for the recorded results.
 

@@ -1,18 +1,19 @@
-name: Release codex-bridge
+name: Build and release codex-bridge
 
 on:
   push:
+    branches: ['**']
     tags: ['v*']
 
 permissions:
   contents: read
 
 concurrency:
-  group: codex-bridge-release
+  group: codex-bridge-${{ github.ref_type == 'tag' && 'release' || github.ref }}
   cancel-in-progress: false
 
 env:
-  TAG: ${{ github.ref_name }}
+  TAG: ${{ github.ref_type == 'tag' && github.ref_name || github.sha }}
 
 jobs:
   build:
@@ -20,10 +21,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - arch: amd64
+          - os: linux
+            arch: amd64
             runner: ubuntu-24.04
-          - arch: arm64
+          - os: linux
+            arch: arm64
             runner: ubuntu-24.04-arm
+          - os: darwin
+            arch: arm64
+            runner: macos-15
+          - os: darwin
+            arch: amd64
+            runner: macos-15-intel
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
@@ -32,32 +41,51 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
+      - name: Validate release tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: python3 .github/release-notes.py "$TAG" > "$RUNNER_TEMP/release-notes.md"
       - name: Verify
         run: |
-          python3 .github/release-notes.py "$TAG" > /tmp/release-notes.md
           python3 .github/release-notes.py --self-test
           go test -race ./...
           go vet ./...
       - name: Build and check native binary
         env:
+          OS: ${{ matrix.os }}
           ARCH: ${{ matrix.arch }}
         run: |
+          test "$(go env GOOS)" = "$OS"
           test "$(go env GOARCH)" = "$ARCH"
           mkdir -p release
-          CGO_ENABLED=0 GOOS=linux GOARCH="$ARCH" go build -trimpath -ldflags="-s -w -X main.version=$TAG" -o "release/codex-bridge-linux-$ARCH" .
-          "release/codex-bridge-linux-$ARCH" --help
-          test "$(env -u HOME -u XDG_CONFIG_HOME "release/codex-bridge-linux-$ARCH" --version)" = "codex-bridge $TAG"
-          if "release/codex-bridge-linux-$ARCH" --config "$RUNNER_TEMP/uninitialized.yaml" status > "$RUNNER_TEMP/status.txt" 2>/dev/null; then
+          binary="release/codex-bridge-$OS-$ARCH"
+          CGO_ENABLED=0 GOOS="$OS" GOARCH="$ARCH" go build -trimpath -ldflags="-s -w -X main.version=$TAG" -o "$binary" .
+          "$binary" --help
+          test "$(env -u HOME -u XDG_CONFIG_HOME "$binary" --version)" = "codex-bridge $TAG"
+          if "$binary" --config "$RUNNER_TEMP/uninitialized.yaml" status > "$RUNNER_TEMP/status.txt" 2>/dev/null; then
             exit 1
           fi
           grep -Fx "Version: $TAG" "$RUNNER_TEMP/status.txt"
+      - uses: actions/setup-node@v6
+        if: matrix.os == 'darwin'
+        with:
+          node-version: '22'
+      - name: Native macOS lifecycle and Codex checks
+        if: matrix.os == 'darwin'
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          sw_vers
+          uname -m
+          npm install --prefix "$RUNNER_TEMP/codex" @openai/codex@0.164.0
+          python3 tests/picker.py --codex "$RUNNER_TEMP/codex/node_modules/.bin/codex" --bridge "$PWD/release/codex-bridge-darwin-$ARCH"
       - uses: actions/upload-artifact@v4
         with:
-          name: binary-${{ matrix.arch }}
+          name: binary-${{ matrix.os }}-${{ matrix.arch }}
           path: release/*
           if-no-files-found: error
 
   publish:
+    if: startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-24.04
     permissions:
@@ -75,8 +103,10 @@ jobs:
         run: |
           test -f release/codex-bridge-linux-amd64
           test -f release/codex-bridge-linux-arm64
+          test -f release/codex-bridge-darwin-amd64
+          test -f release/codex-bridge-darwin-arm64
           cp LICENSE THIRD_PARTY_NOTICES.md release/
-          (cd release && sha256sum codex-bridge-linux-* > checksums.txt)
+          (cd release && sha256sum codex-bridge-* > checksums.txt)
           python3 .github/release-notes.py "$TAG" > release-notes.md
       - name: Prepare draft
         id: release

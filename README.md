@@ -5,23 +5,43 @@ Requires Codex CLI; tested with **0.164.0**.
 
 ## Install
 
-Linux, installed for your user. No `sudo` needed.
+Install in `~/.local/bin` for your user. No `sudo` needed.
+
+### Linux
 
 **x86_64 / amd64**
 
 ```sh
 curl -fL https://github.com/agent0ai/codex-bridge/releases/latest/download/codex-bridge-linux-amd64 -o codex-bridge-linux-amd64 &&
-install -Dm 755 codex-bridge-linux-amd64 "$HOME/.local/bin/codex-bridge"
+mkdir -p "$HOME/.local/bin" &&
+install -m 755 codex-bridge-linux-amd64 "$HOME/.local/bin/codex-bridge"
 ```
 
 **ARM64 / aarch64**
 
 ```sh
 curl -fL https://github.com/agent0ai/codex-bridge/releases/latest/download/codex-bridge-linux-arm64 -o codex-bridge-linux-arm64 &&
-install -Dm 755 codex-bridge-linux-arm64 "$HOME/.local/bin/codex-bridge"
+mkdir -p "$HOME/.local/bin" &&
+install -m 755 codex-bridge-linux-arm64 "$HOME/.local/bin/codex-bridge"
 ```
 
-Add it to PATH for this shell, and put the same line in `~/.bashrc` (Bash) or `~/.zshrc` (Zsh) for future terminals:
+### macOS (Apple Silicon and Intel)
+
+Mac release assets are prepared but not yet published. Build from source with Git and [Go 1.24.4 or newer](https://go.dev/dl/), using native Go for your Mac: `arm64` on Apple Silicon, `amd64` on Intel (`go env GOARCH`):
+
+```sh
+git clone https://github.com/agent0ai/codex-bridge.git
+cd codex-bridge
+go build -trimpath -ldflags="-s -w -X main.version=$(git describe --tags --always --dirty)" -o codex-bridge . &&
+mkdir -p "$HOME/.local/bin" &&
+install -m 755 codex-bridge "$HOME/.local/bin/codex-bridge"
+```
+
+The default Mac config is `~/Library/Application Support/codex-bridge/config.yaml`; `codex-bridge edit` opens it without needing to enter that path.
+
+### PATH
+
+If `~/.local/bin` is not already on PATH, add it for this shell and put the same line in `~/.zshrc` (macOS's default Zsh) or `~/.bashrc` (Bash) for future terminals:
 
 ```sh
 export PATH="$HOME/.local/bin:$PATH"
