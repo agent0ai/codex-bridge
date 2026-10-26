@@ -29,7 +29,7 @@ def picker(env, cwd, flags=()):
                                stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
     os.close(slave)
 
-    def read_until(needle, timeout=40):
+    def read_until(*needles, timeout=40):
         output = b""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -39,18 +39,18 @@ def picker(env, cwd, flags=()):
                 if b"\x1b[6n" in chunk:
                     os.write(master, b"\x1b[1;1R")
                 clean = re.sub(rb"\x1b\[[0-?]*[ -/]*[@-~]", b"", output)
-                if needle in clean:
+                if all(needle in clean for needle in needles):
                     return clean.decode(errors="replace")
             if process.poll() is not None:
                 break
-        raise AssertionError(f"TUI did not show {needle!r}: {output[-5000:]!r}")
+        raise AssertionError(f"TUI did not show {needles!r}: {output[-5000:]!r}")
 
     try:
         read_until(b"state=idle")
         os.write(master, b"/model")
         time.sleep(0.3)
         os.write(master, b"\r")
-        return read_until(b"esc")
+        return read_until(b"Select Model and Effort", b"esc back")
     finally:
         os.write(master, b"\x1b\x03\x03")
         try:
