@@ -162,3 +162,41 @@ Updated binaries installed in both host bin directories and the lab; host catalo
 files synced. Active shared Codex server was not restarted; sync --force refreshes
 its metadata. GitHub publication and native ARM execution were not run locally;
 the workflow gates publication on both native jobs. No repository push/tag made.
+
+Native macOS port and release preparation — 2026-10-26 UTC
+Tested commit: 127e9d13db15f0ce574ca8d8d1fcdb3c81faae47
+GitHub Actions: https://github.com/agent0ai/codex-bridge/actions/runs/40307440625
+All four native build jobs passed; publication was skipped for the branch push.
+macOS: 15.7.9 (24G830), arm64 (Apple Silicon) and x86_64/amd64 (Intel).
+Both Mac jobs used Go 1.24.4 and packaged Codex CLI 0.164.0.
+Linux: Ubuntu 24.04 native amd64 and arm64 jobs retained and passed.
+
+PASS native go test -race ./..., go vet ./..., and CGO-disabled release builds.
+PASS native --help, config-independent --version, and uninitialized status checks.
+PASS existing editor selection tests, including VISUAL/EDITOR precedence and fallback.
+PASS real Mac default config under User Home/Library/Application Support, with spaces.
+PASS edit opens that config as one argument; start/repeated start/status/stop work.
+PASS real Codex daemon discovery and Unix-socket model/list status on both Macs.
+PASS stale catalog after normal sync; --no-daemon shows the external model first.
+PASS sync --force refreshes the shared daemon and real terminal model picker.
+PASS changed vision metadata is unsynced until restart; stopped daemon cannot verify.
+These checks use isolated subprocess homes/CODEX_HOME, dummy credentials, and an
+offline provider. No inference requests or changes to the workspace's live services.
+The existing Unix production code needed no changes. Native timing exposed a test
+bug: the old picker wait matched "esc" inside the welcome text's "describe". The
+test now waits for the picker heading and exact "esc back" footer.
+
+PASS local Linux lifecycle/picker regression, Go race tests/vet, both Darwin builds,
+actionlint v1.7.12, release-notes self-test, and git diff --check.
+Downloaded the four CI artifacts, verified unique names and Mach-O/ELF architectures,
+assembled license/notices, and generated/verified the workflow's four-binary checksums:
+707c486d4cd4934d2f6a5f0d78aef4e8fdd50b422c8c7ad519124cb9a0e1c49d  codex-bridge-darwin-amd64
+b65b33ed70cfde144d2f5ab59e0337bd3932537af0672db5cd83d321562e520a  codex-bridge-darwin-arm64
+4e315160c9a039055e48b7d4a99d24c2ec350ed36b56dfbb5d22b5b55fc5e47c  codex-bridge-linux-amd64
+4cd5671bab4dc2ce43a255957ad74148d38da57354c71de78f0c3837c5e1c17f  codex-bridge-linux-arm64
+
+Scope limits: no authenticated inference/model-switch tests on macOS, other macOS
+versions, Windows support, or public release/tag. Earlier live provider results
+remain Linux-only. The published v0.1.2 release still has Linux assets only; the
+README provides a native Mac source build and per-user installation instead.
+Mac release publication and independent task review remain pending.
