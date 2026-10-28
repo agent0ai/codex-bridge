@@ -121,6 +121,26 @@ with tempfile.TemporaryDirectory(prefix="bridge-picker-", dir="/tmp") as tmp:
         assert "Started at" in run(args.bridge, "start")
         assert "Already running" in run(args.bridge, "start")
         print("PASS background start and repeated start", flush=True)
+        run(args.bridge, "stop")
+        assert "Started at" in run(args.bridge, "restart")
+        result = run(args.bridge, "restart")
+        assert "Stopped" in result and "Started at" in result, result
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            new_port = listener.getsockname()[1]
+        bridge_config.write_text(bridge_config.read_text().replace(f"127.0.0.1:{port}", f"127.0.0.1:{new_port}"))
+        result = run(args.bridge, "--config", str(bridge_config), "restart")
+        assert "Stopped" in result and f"Started at http://127.0.0.1:{new_port}" in result, result
+        working_config = bridge_config.read_text()
+        env.pop("BRIDGE_RESTART_TEST_MISSING_KEY", None)
+        for invalid_config in ("invalid: true\n", working_config + "    api_key_env: BRIDGE_RESTART_TEST_MISSING_KEY\n"):
+            bridge_config.write_text(invalid_config)
+            result = subprocess.run([args.bridge, "restart"], env=env, cwd=cwd,
+                                    capture_output=True, text=True, timeout=20)
+            assert result.returncode != 0, result.stdout
+            bridge_config.write_text(working_config)
+            assert "Already running" in run(args.bridge, "start"), "invalid restart stopped the working proxy"
+        print("PASS restart while stopped/running, port change, and invalid config/key preservation", flush=True)
         run("codex", "app-server", "daemon", "start")
         run(args.bridge, "--config", str(bridge_config), "sync")
         verify_status("unsynced")

@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -28,18 +29,39 @@ func apiError(w http.ResponseWriter, status int, message string) {
 type bridge struct {
 	path, token string
 	client      *http.Client
-	builtins    map[string]bool
 	shutdown    func()
+	modelsMu    sync.Mutex
+	builtins    map[string]bool
 }
 
-func newBridge(path, token string, base object) *bridge {
+func newBridge(path, token string) *bridge {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.ResponseHeaderTimeout = 90 * time.Second
-	b := &bridge{path: path, token: token, builtins: map[string]bool{}, client: &http.Client{Transport: transport, Timeout: 15 * time.Minute, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	return &bridge{path: path, token: token, client: &http.Client{Transport: transport, Timeout: 15 * time.Minute, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+}
+
+func (b *bridge) isBuiltin(model string) (bool, error) {
+	b.modelsMu.Lock()
+	defer b.modelsMu.Unlock()
+	if b.builtins[model] {
+		return true, nil
+	}
+	b.builtins = nil
+	base, err := bundledCatalog()
+	if err != nil {
+		return false, err
+	}
+	b.builtins = make(map[string]bool)
 	for _, raw := range arr(base["models"]) {
 		b.builtins[str(obj(raw)["slug"])] = true
 	}
-	return b
+	return b.builtins[model], nil
+}
+
+func (b *bridge) invalidateModels() {
+	b.modelsMu.Lock()
+	b.builtins = nil
+	b.modelsMu.Unlock()
 }
 
 func (b *bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -104,7 +126,12 @@ func (b *bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if route == nil {
-		if !b.builtins[model] {
+		known, err := b.isBuiltin(model)
+		if err != nil {
+			apiError(w, 503, "could not read the installed Codex model catalog; retry")
+			return
+		}
+		if !known {
 			apiError(w, 400, "unknown model; add it to the bridge config and sync")
 			return
 		}
@@ -234,17 +261,21 @@ func (b *bridge) subscription(w http.ResponseWriter, r *http.Request, data []byt
 		pr.Out.URL.Path = target.Path + strings.TrimPrefix(r.URL.Path, "/v1")
 		pr.Out.Header.Del("X-Codex-Bridge-Token")
 		pr.Out.Header.Del("Cookie")
-	}, Transport: b.client.Transport, FlushInterval: -1, ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) { apiError(w, 502, "OpenAI connection failed") }}
+	}, Transport: b.client.Transport, FlushInterval: -1, ModifyResponse: func(resp *http.Response) error {
+		if resp.StatusCode >= 300 {
+			b.invalidateModels()
+		}
+		return nil
+	}, ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
+		b.invalidateModels()
+		apiError(w, 502, "OpenAI connection failed")
+	}}
 	r.Body = io.NopCloser(bytes.NewReader(data))
 	r.ContentLength = int64(len(data))
 	proxy.ServeHTTP(w, r)
 }
 
 func serve(path string, c Config, token string) error {
-	base, err := bundledCatalog()
-	if err != nil {
-		return err
-	}
 	listener, err := net.Listen("tcp", c.Listen)
 	if err != nil {
 		return err
@@ -256,7 +287,7 @@ func serve(path string, c Config, token string) error {
 	defer os.Remove(path + ".running")
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	b := newBridge(path, token, base)
+	b := newBridge(path, token)
 	b.shutdown = cancel
 	server := &http.Server{Handler: b, ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 1 << 20}
 	stopped := make(chan struct{})

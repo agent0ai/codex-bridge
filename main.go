@@ -35,7 +35,7 @@ func run(args []string) error {
 	force := fs.Bool("force", false, "with sync, restart the shared Codex server immediately (may interrupt active work)")
 	showVersion := fs.Bool("version", false, "Print the build version")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: codex-bridge [--config FILE] init|edit|sync|unsync|start|stop|status|serve\n\ninit     Create an example config\nedit     Create config if missing, then open $VISUAL / $EDITOR or a detected editor\nsync     Write Codex model settings and show how to reload them\nunsync   Restore previous Codex provider settings\nstart    Start proxy in background\nstop     Stop proxy gracefully\nstatus   Show proxy health, model count, and Codex sync status\nserve    Run in foreground (Ctrl-C stops)")
+		fmt.Fprintln(fs.Output(), "Usage: codex-bridge [--config FILE] init|edit|sync|unsync|start|stop|restart|status|serve\n\ninit     Create an example config\nedit     Create config if missing, then open $VISUAL / $EDITOR or a detected editor\nsync     Write Codex model settings and show how to reload them\nunsync   Restore previous Codex provider settings\nstart    Start proxy in background\nstop     Stop proxy gracefully\nrestart  Stop proxy gracefully, then start it with the current config\nstatus   Show proxy health, model count, and Codex sync status\nserve    Run in foreground (Ctrl-C stops)")
 		fs.PrintDefaults()
 	}
 	err := fs.Parse(args)
@@ -126,19 +126,27 @@ func run(args []string) error {
 	case "serve":
 		return serve(*path, c, token)
 	case "stop":
-		if err = control(c, token, *path, "POST", "/stop"); err != nil {
-			return err
-		}
-		for i := 0; i < 120; i++ {
-			if control(c, token, *path, "GET", "/health") != nil {
-				fmt.Println("Stopped")
-				return nil
+		return stop(*path, c, token)
+	case "start", "restart":
+		return withLock(*path+".lock", func() error {
+			if command == "restart" {
+				for _, m := range c.Models {
+					if _, err := m.key(); err != nil {
+						return err
+					}
+				}
+				running := c
+				if address, err := os.ReadFile(*path + ".running"); err == nil && validListen(string(address)) {
+					running.Listen = string(address)
+				}
+				if control(running, token, *path, "GET", "/health") == nil {
+					if err := stop(*path, running, token); err != nil {
+						return err
+					}
+				}
 			}
-			time.Sleep(100 * time.Millisecond)
-		}
-		return fmt.Errorf("proxy has not stopped yet")
-	case "start":
-		return withLock(*path+".lock", func() error { return start(*path, c, token) })
+			return start(*path, c, token)
+		})
 	default:
 		fs.Usage()
 		return fmt.Errorf("unknown command %q", command)
@@ -242,11 +250,28 @@ func control(c Config, token, path, method, endpoint string) error {
 	return nil
 }
 
+func stop(path string, c Config, token string) error {
+	if err := control(c, token, path, "POST", "/stop"); err != nil {
+		return err
+	}
+	for i := 0; i < 120; i++ {
+		if control(c, token, path, "GET", "/health") != nil {
+			// serve removes this file only after in-flight requests finish.
+			if _, err := os.Stat(path + ".running"); os.IsNotExist(err) {
+				fmt.Println("Stopped")
+				return nil
+			}
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return fmt.Errorf("proxy has not stopped yet")
+}
+
 func start(path string, c Config, token string) error {
 	if running, err := os.ReadFile(path + ".running"); err == nil && validListen(string(running)) && string(running) != c.Listen {
 		old := Config{Listen: string(running)}
 		if control(old, token, path, "GET", "/health") == nil {
-			return fmt.Errorf("proxy is running at %s; run stop before changing the listen address", old.Listen)
+			return fmt.Errorf("proxy is running at %s; run restart to change the listen address", old.Listen)
 		}
 	}
 	if control(c, token, path, "GET", "/health") == nil {

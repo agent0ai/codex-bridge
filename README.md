@@ -1,7 +1,7 @@
 # codex-bridge
 
 Use external models alongside your ChatGPT subscription in Codex CLI.
-Requires Codex CLI; tested with **0.164.0**.
+Requires Codex CLI; tested with **0.164.0** and **0.165.0**.
 
 ## Install
 
@@ -27,14 +27,20 @@ install -m 755 codex-bridge-linux-arm64 "$HOME/.local/bin/codex-bridge"
 
 ### macOS (Apple Silicon and Intel)
 
-Mac release assets are prepared but not yet published. Build from source with Git and [Go 1.24.4 or newer](https://go.dev/dl/), using native Go for your Mac: `arm64` on Apple Silicon, `amd64` on Intel (`go env GOARCH`):
+**Apple Silicon / arm64**
 
 ```sh
-git clone https://github.com/agent0ai/codex-bridge.git
-cd codex-bridge
-go build -trimpath -ldflags="-s -w -X main.version=$(git describe --tags --always --dirty)" -o codex-bridge . &&
+curl -fL https://github.com/agent0ai/codex-bridge/releases/latest/download/codex-bridge-darwin-arm64 -o codex-bridge-darwin-arm64 &&
 mkdir -p "$HOME/.local/bin" &&
-install -m 755 codex-bridge "$HOME/.local/bin/codex-bridge"
+install -m 755 codex-bridge-darwin-arm64 "$HOME/.local/bin/codex-bridge"
+```
+
+**Intel / amd64**
+
+```sh
+curl -fL https://github.com/agent0ai/codex-bridge/releases/latest/download/codex-bridge-darwin-amd64 -o codex-bridge-darwin-amd64 &&
+mkdir -p "$HOME/.local/bin" &&
+install -m 755 codex-bridge-darwin-amd64 "$HOME/.local/bin/codex-bridge"
 ```
 
 The default Mac config is `~/Library/Application Support/codex-bridge/config.yaml`; `codex-bridge edit` opens it without needing to enter that path.

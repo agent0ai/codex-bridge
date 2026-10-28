@@ -24,11 +24,10 @@ codex --no-daemon       # load the current config without using the shared serve
 # Or, to use normal codex (this may interrupt active shared-server work):
 codex-bridge sync --force
 codex
-codex-bridge stop
-codex-bridge start
+codex-bridge restart
 ```
 
-Routing and body parameter changes are loaded on the next request. Restart the proxy after changing its listen address or the environment variables it inherits. `stop` and `status` still work if you make a config syntax error or change the configured port.
+Routing and body parameter changes are loaded on the next request. The bridge caches native model IDs and reloads the installed Codex catalog when a requested model is missing, so newly installed models work without restarting the proxy. Native OpenAI HTTP errors and connection failures clear the cache for the next request; failed inference requests are not replayed by the bridge. Unknown models are still rejected; a catalog read failure returns a retryable error. External requests do not read the Codex catalog. Run `codex-bridge restart` after changing the listen address, inherited environment variables, or the bridge binary. `stop` and `status` still work if you make a config syntax error or change the configured port.
 
 ## Install on your own machine
 
@@ -105,11 +104,14 @@ Changing `context_window` does not enlarge the provider's real context limit. Se
 | `sync --force` | Sync, then immediately invoke `codex app-server daemon restart`; active work may be interrupted. |
 | `start` | Start one background proxy; repeated starts reuse the running instance. |
 | `stop` | Stop the listener and allow active requests up to ten seconds to finish. |
+| `restart` | Gracefully stop the proxy, then start with the current config and environment; also starts a stopped proxy. |
 | `status` | Show proxy health, configured model count, and whether Codex's provider/catalog match the bridge. |
 | `serve` | Run in the foreground; stop with Ctrl-C. |
 | `unsync` | Restore the prior provider/catalog settings while preserving unrelated config changes. |
 
 `sync` writes `$CODEX_HOME/config.toml` and `codex-bridge-models.json` (normally under `~/.codex`). It preserves unrelated settings and comments, creates `config.toml.bridge-backup`, and is idempotent. It refuses to overwrite an existing unmanaged `codex-bridge` provider or a separate custom model catalog. Profiles are never created. Model aliases must not collide with built-in model names.
+
+After updating Codex, run `sync` to refresh the picker catalog. The bridge refreshes its model-ID cache on a missing model or after a native upstream error, but Codex's picker still needs to load the synced file. `restart` restarts only the bridge proxy; `sync --force` restarts Codex's shared server. Invalid config or missing environment-based API keys abort `restart` before stopping a working proxy.
 
 Codex 0.164.0 can reconnect new terminals to an existing shared background server. That server keeps its startup model catalog, so **closing and reopening the terminal does not refresh it**. Use `codex --no-daemon` to load the synced files immediately, or run `codex-bridge sync --force` and reopen Codex. The force option restarts the shared server through Codex's own daemon command, which may interrupt active work and takes time to shut down gracefully. Normal `sync` never restarts it. If restarting fails, the command exits with an error and clearly reports that the files were still synced.
 

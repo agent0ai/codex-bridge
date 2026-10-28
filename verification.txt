@@ -200,3 +200,16 @@ versions, Windows support, or public release/tag. Earlier live provider results
 remain Linux-only. The published v0.1.2 release still has Linux assets only; the
 README provides a native Mac source build and per-user installation instead.
 Mac release publication and independent task review remain pending.
+
+Model cache refresh and restart command — 2026-10-28 UTC
+PASS go test -race ./..., go vet ./..., release-notes self-test, actionlint,
+and git diff --check on Linux.
+PASS model cache reuse, refresh on unknown native models, invalidation after
+OpenAI HTTP/connection failures, catalog failure recovery, and concurrent access.
+Both /responses and /responses/compact retain upstream errors without replay.
+PASS graceful shutdown waits for an active request before removing its state.
+PASS isolated Codex 0.165.0 lifecycle/picker regression, including restart while
+stopped/running, changed listen address, and preservation on invalid config/keys.
+The Apple Silicon and Intel macOS jobs run race tests, vet, native builds, and
+isolated Codex lifecycle/picker checks before publishing all four release assets.
+No live inference requests or changes to the workspace's running bridge service.

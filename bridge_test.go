@@ -5,13 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/pelletier/go-toml/v2"
 	"go.yaml.in/yaml/v3"
@@ -100,7 +103,7 @@ func TestExampleEnvironmentKeyAlternative(t *testing.T) {
 }
 
 func TestStartAndSyncRequireInitializedConfig(t *testing.T) {
-	for _, command := range []string{"start", "sync"} {
+	for _, command := range []string{"start", "restart", "sync"} {
 		t.Run(command, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "uninitialized")
 			if err := run([]string{"--config", filepath.Join(dir, "config.yaml"), command}); !os.IsNotExist(err) {
@@ -295,7 +298,22 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
+func mockBundledCatalog(t *testing.T, catalog string) string {
+	t.Helper()
+	dir := t.TempDir()
+	script := "#!/bin/sh\n[ \"$*\" = 'debug models --bundled' ] || exit 1\nprintf . >> \"$TEST_CODEX_CATALOG_CALLS\"\nprintf '%s' \"$TEST_CODEX_CATALOG\"\n"
+	if err := os.WriteFile(filepath.Join(dir, "codex"), []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("TEST_CODEX_CATALOG", catalog)
+	calls := filepath.Join(dir, "catalog-calls")
+	t.Setenv("TEST_CODEX_CATALOG_CALLS", calls)
+	return calls
+}
+
 func TestRoutesNeverLeakSubscriptionCredentials(t *testing.T) {
+	mockBundledCatalog(t, `{"models":[{"slug":"builtin"}]}`)
 	path := filepath.Join(t.TempDir(), "config.yaml")
 	config := `listen: 127.0.0.1:8787
 models:
@@ -312,7 +330,7 @@ models:
 	if err := os.WriteFile(path, []byte(config), 0600); err != nil {
 		t.Fatal(err)
 	}
-	b := newBridge(path, "local-secret", object{"models": []any{object{"slug": "builtin"}}})
+	b := newBridge(path, "local-secret")
 	calls := 0
 	b.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		calls++
@@ -601,14 +619,188 @@ func TestExternalModelsSortBeforeBuiltins(t *testing.T) {
 	}
 }
 
+func TestNativeModelCache(t *testing.T) {
+	const original = `{"models":[{"slug":"builtin"}]}`
+	const updated = `{"models":[{"slug":"builtin"},{"slug":"gpt-6.1-terra"}]}`
+	for _, endpoint := range []string{"/v1/responses", "/v1/responses/compact"} {
+		t.Run(endpoint, func(t *testing.T) {
+			catalogCalls := mockBundledCatalog(t, original)
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte("models: []\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			b := newBridge(path, "local-secret")
+			calls, status := 0, 200
+			b.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				calls++
+				if r.URL.String() != "https://chatgpt.com/backend-api/codex"+strings.TrimPrefix(endpoint, "/v1") || r.Header.Get("Authorization") != "Bearer subscription-secret" {
+					t.Fatal("incorrect native route")
+				}
+				if status == 0 {
+					return nil, fmt.Errorf("connection failed")
+				}
+				return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("upstream response"))}, nil
+			})
+			reads := 0
+			for _, tc := range []struct {
+				name, model, catalog           string
+				upstream, want, newReads, sent int
+			}{
+				{"initial load", "builtin", original, 200, 200, 1, 1},
+				{"cache hit", "builtin", `{`, 200, 200, 0, 1},
+				{"new model", "gpt-6.1-terra", updated, 200, 200, 1, 1},
+				{"new model cached", "gpt-6.1-terra", `{`, 200, 200, 0, 1},
+				{"model error", "gpt-6.1-terra", original, 404, 404, 0, 1},
+				{"removed model after error", "gpt-6.1-terra", original, 200, 400, 1, 0},
+				{"broken catalog", "gpt-6.1-terra", `{`, 200, 503, 1, 0},
+				{"empty catalog", "gpt-6.1-terra", `{"models":[]}`, 200, 503, 1, 0},
+				{"recovery", "gpt-6.1-terra", updated, 200, 200, 1, 1},
+				{"connection error", "gpt-6.1-terra", updated, 0, 502, 0, 1},
+				{"reload after connection error", "gpt-6.1-terra", updated, 200, 200, 1, 1},
+				{"server error", "gpt-6.1-terra", updated, 500, 500, 0, 1},
+				{"reload after server error", "gpt-6.1-terra", updated, 200, 200, 1, 1},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					t.Setenv("TEST_CODEX_CATALOG", tc.catalog)
+					status = tc.upstream
+					before := calls
+					r := httptest.NewRequest("POST", endpoint, strings.NewReader(`{"model":"`+tc.model+`","input":[]}`))
+					r.Header.Set("X-Codex-Bridge-Token", "local-secret")
+					r.Header.Set("Authorization", "Bearer subscription-secret")
+					r.Header.Set("ChatGPT-Account-ID", "account")
+					w := httptest.NewRecorder()
+					b.ServeHTTP(w, r)
+					if w.Code != tc.want || calls-before != tc.sent {
+						t.Fatal(w.Code, w.Body.String(), "upstream calls:", calls-before)
+					}
+					if tc.sent == 1 && status != 0 && w.Body.String() != "upstream response" {
+						t.Fatal("changed upstream response:", w.Body.String())
+					}
+					reads += tc.newReads
+					log, err := os.ReadFile(catalogCalls)
+					if err != nil || len(log) != reads {
+						t.Fatalf("catalog reads=%d, want=%d: %v", len(log), reads, err)
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestNativeModelCacheConcurrent(t *testing.T) {
+	mockBundledCatalog(t, `{"models":[{"slug":"builtin"}]}`)
+	b := newBridge("", "")
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 4; j++ {
+				known, err := b.isBuiltin("builtin")
+				if err != nil || !known {
+					t.Errorf("concurrent lookup failed: %v", err)
+				}
+				b.invalidateModels()
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func TestStopWaitsForRequests(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		<-release
+		_, _ = io.WriteString(w, "ok")
+	}))
+	t.Cleanup(upstream.Close)
+	t.Cleanup(unblock)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := Config{Listen: listener.Addr().String(), Models: []Model{{Name: "custom", API: "responses", BaseURL: upstream.URL}}}
+	_ = listener.Close()
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data, err := yaml.Marshal(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		t.Fatal(err)
+	}
+	served := make(chan error, 1)
+	go func() { served <- serve(path, c, "local") }()
+	t.Cleanup(func() {
+		unblock()
+		_ = control(c, "local", path, "POST", "/stop")
+		select {
+		case err := <-served:
+			if err != nil {
+				t.Error(err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("server did not stop")
+		}
+	})
+	deadline := time.Now().Add(5 * time.Second)
+	for control(c, "local", path, "GET", "/health") != nil {
+		if time.Now().After(deadline) {
+			t.Fatal("server did not start")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	requestDone := make(chan error, 1)
+	go func() {
+		r, _ := http.NewRequest("POST", "http://"+c.Listen+"/v1/responses", strings.NewReader(`{"model":"custom","input":[]}`))
+		r.Header.Set("X-Codex-Bridge-Token", "local")
+		client := &http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Do(r)
+		if err == nil {
+			defer resp.Body.Close()
+			body, readErr := io.ReadAll(resp.Body)
+			if readErr != nil || resp.StatusCode != 200 || string(body) != "ok" {
+				err = fmt.Errorf("request interrupted: status=%d body=%q error=%v", resp.StatusCode, body, readErr)
+			}
+		}
+		requestDone <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("request did not reach upstream")
+	}
+	stopped := make(chan error, 1)
+	go func() { stopped <- stop(path, c, "local") }()
+	select {
+	case err := <-stopped:
+		t.Fatal("stop returned before request finished:", err)
+	case <-time.After(250 * time.Millisecond):
+	}
+	unblock()
+	if err := <-requestDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-stopped; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(path + ".running"); !os.IsNotExist(err) {
+		t.Fatal("shutdown left the old running marker:", err)
+	}
+}
+
 func TestResponsesPassthroughAndAuthErrors(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // External requests do not need the Codex catalog.
 	p := filepath.Join(t.TempDir(), "config.toml")
 	config := []byte("[[models]]\nname='native'\nmodel='remote'\napi='responses'\nbase_url='https://provider.example/v1'\napi_key_env='BRIDGE_TEST_KEY'\n[models.params]\ntemperature=0.7\n")
 	if err := os.WriteFile(p, config, 0600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("BRIDGE_TEST_KEY", "test-secret")
-	b := newBridge(p, "local", object{})
+	b := newBridge(p, "local")
 	for _, status := range []int{200, 401, 302} {
 		b.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
 			raw, _ := io.ReadAll(r.Body)
