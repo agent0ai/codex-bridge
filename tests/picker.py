@@ -83,6 +83,7 @@ with tempfile.TemporaryDirectory(prefix="bridge-picker-", dir="/tmp") as tmp:
     (codex_home / "auth.json").write_text(json.dumps({"OPENAI_API_KEY": "test-not-a-real-key"}))
     (codex_home / "config.toml").write_text(
         'model = "gpt-6-sol"\nmodel_provider = "offline"\ncli_auth_credentials_store = "file"\n'
+        'check_for_update_on_startup = false\n'
         '[model_providers.offline]\nname = "Offline test"\n'
         'base_url = "http://127.0.0.1:1/v1"\nwire_api = "responses"\n'
         f'[projects."{cwd}"]\ntrust_level = "trusted"\n')
