@@ -1,11 +1,28 @@
 # codex-bridge
 
-Use external models alongside your ChatGPT subscription in Codex CLI.
-Requires Codex CLI; tested with **0.164.0** and **0.165.0**.
+- Use external models alongside your ChatGPT subscription in Codex CLI
+- Configure any chat completions endpoint and model and merge with Codex model list
+- Change models on the fly with `/model` selector
+
+![Codex model picker showing external models alongside OpenAI subscription models](.github/assets/model-picker.webp)
+
+## Quick guide
+
+```sh
+# Edit the models config and replace the example API key
+codex-bridge edit
+
+# Start the proxy service
+codex-bridge start
+
+# Sync models (--force restarts the Codex server)
+codex-bridge sync --force
+
+# Start Codex as usual and choose a model with /model
+codex
+```
 
 ## Install
-
-Install in `~/.local/bin` for your user. No `sudo` needed.
 
 ### Linux
 
@@ -25,7 +42,7 @@ mkdir -p "$HOME/.local/bin" &&
 install -m 755 codex-bridge-linux-arm64 "$HOME/.local/bin/codex-bridge"
 ```
 
-### macOS (Apple Silicon and Intel)
+### macOS
 
 **Apple Silicon / arm64**
 
@@ -43,30 +60,12 @@ mkdir -p "$HOME/.local/bin" &&
 install -m 755 codex-bridge-darwin-amd64 "$HOME/.local/bin/codex-bridge"
 ```
 
-The default Mac config is `~/Library/Application Support/codex-bridge/config.yaml`; `codex-bridge edit` opens it without needing to enter that path.
-
 ### PATH
 
 If `~/.local/bin` is not already on PATH, add it for this shell and put the same line in `~/.zshrc` (macOS's default Zsh) or `~/.bashrc` (Bash) for future terminals:
 
 ```sh
 export PATH="$HOME/.local/bin:$PATH"
-```
-
-## Quick start
-
-```sh
-# Edit the models config and replace the example API key
-codex-bridge edit
-
-# Start the proxy service
-codex-bridge start
-
-# Sync models (--force restarts the Codex server)
-codex-bridge sync --force
-
-# Start Codex as usual and choose a model with /model
-codex
 ```
 
 [Config](config.example.yaml) · [Guide](docs/guide.md) · [MIT License](LICENSE) · [Contributing](CONTRIBUTING.md) · [Third-party notices](THIRD_PARTY_NOTICES.md)
