@@ -9,7 +9,7 @@
 ## Quick guide
 
 ```sh
-# Edit the models config and replace the example API key
+# Edit the models config
 codex-bridge edit
 
 # Start the proxy service
