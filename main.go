@@ -35,7 +35,7 @@ func run(args []string) error {
 	force := fs.Bool("force", false, "with sync, restart the shared Codex server immediately (may interrupt active work)")
 	showVersion := fs.Bool("version", false, "Print the build version")
 	fs.Usage = func() {
-		fmt.Fprintln(fs.Output(), "Usage: codex-bridge [--config FILE] init|edit|sync|unsync|start|stop|restart|status|serve\n\ninit     Create an example config\nedit     Create config if missing, then open $VISUAL / $EDITOR or a detected editor\nsync     Write Codex model settings and show how to reload them\nunsync   Restore previous Codex provider settings\nstart    Start proxy in background\nstop     Stop proxy gracefully\nrestart  Stop proxy gracefully, then start it with the current config\nstatus   Show proxy health, model count, and Codex sync status\nserve    Run in foreground (Ctrl-C stops)")
+		fmt.Fprintln(fs.Output(), "Usage: codex-bridge [--config FILE] init|edit|sync|unsync|start|stop|restart|update|status|serve\n\ninit     Create an example config\nedit     Create config if missing, then open $VISUAL / $EDITOR or a detected editor\nsync     Write Codex model settings and show how to reload them\nunsync   Restore previous Codex provider settings\nstart    Start proxy in background\nstop     Stop proxy gracefully\nrestart  Stop proxy gracefully, then start it with the current config\nupdate   Install the latest release and restart the proxy\nstatus   Show proxy health, model count, and Codex sync status\nserve    Run in foreground (Ctrl-C stops)")
 		fs.PrintDefaults()
 	}
 	err := fs.Parse(args)
@@ -117,6 +117,14 @@ func run(args []string) error {
 	}
 	if command == "sync" {
 		return withLock(filepath.Join(codexDir(), ".codex-bridge.lock"), func() error { return syncCodex(*path, c, *force) })
+	}
+	if command == "update" {
+		for _, m := range c.Models {
+			if _, err := m.key(); err != nil {
+				return err
+			}
+		}
+		return updateBridge(*path)
 	}
 	token, err := localToken(*path)
 	if err != nil {

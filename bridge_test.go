@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -103,7 +104,7 @@ func TestExampleEnvironmentKeyAlternative(t *testing.T) {
 }
 
 func TestStartAndSyncRequireInitializedConfig(t *testing.T) {
-	for _, command := range []string{"start", "restart", "sync"} {
+	for _, command := range []string{"start", "restart", "sync", "update"} {
 		t.Run(command, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "uninitialized")
 			if err := run([]string{"--config", filepath.Join(dir, "config.yaml"), command}); !os.IsNotExist(err) {
@@ -367,10 +368,6 @@ func TestNonStreamingProvider(t *testing.T) {
 	}
 }
 
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
-
 func mockBundledCatalog(t *testing.T, catalog string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -466,6 +463,163 @@ models:
 	}
 }
 
+func TestUnknownEndpointsPassThroughToOpenAI(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // Passthrough does not need the Codex catalog.
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("models: []\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var compressed bytes.Buffer
+	gz := gzip.NewWriter(&compressed)
+	if _, err := gz.Write([]byte(`{"future":"payload"}`)); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, account := range []string{"", "account"} {
+		base := "https://api.openai.com/v1"
+		if account != "" {
+			base = "https://chatgpt.com/backend-api/codex"
+		}
+		for _, tc := range []struct {
+			name, method, path, suffix, contentType, encoding, body string
+			status                                                  int
+		}{
+			{"image generation", "POST", "/v1/images/generations", "/images/generations", "application/json", "", `{"model":"image-model-outside-catalog","prompt":"test"}`, 200},
+			{"image edit", "POST", "/v1/images/edits", "/images/edits", "multipart/form-data; boundary=image", "", "--image\r\nContent-Disposition: form-data; name=\"image\"; filename=\"input.png\"\r\nContent-Type: image/png\r\n\r\n\x00\xff\x89PNG\r\n--image--\r\n", 201},
+			{"compressed future tool", "PATCH", "/v1/future%2ftool?x=1&x=2&literal=a;b&path=a%2Fb", "/future%2ftool?x=1&x=2&literal=a;b&path=a%2Fb", "application/json", "gzip", compressed.String(), 202},
+			{"download", "GET", "/v1/files/file%2Fid/content", "/files/file%2Fid/content", "", "", "", 200},
+			{"delete", "DELETE", "/v1/files/file-id", "/files/file-id", "", "", "", 200},
+			{"unversioned", "PUT", "/future/tool", "/future/tool", "application/octet-stream", "", "\x00\xff", 200},
+			{"different prefix", "GET", "/v10/tool", "/v10/tool", "", "", "", 200},
+			{"untrusted request host", "GET", "https://untrusted.example/v1/tool", "/tool", "", "", "", 200},
+			{"upstream unauthorized", "GET", "/v1/tool", "/tool", "", "", "", 401},
+			{"upstream forbidden", "GET", "/v1/tool", "/tool", "", "", "", 403},
+			{"upstream missing endpoint", "GET", "/v1/tool", "/tool", "", "", "", 404},
+			{"rate limited", "GET", "/v1/tool", "/tool", "", "", "", 429},
+			{"redirect", "GET", "/v1/tool", "/tool", "", "", "", 307},
+		} {
+			t.Run(account+"/"+tc.name, func(t *testing.T) {
+				b := newBridge(path, "local-secret")
+				calls := 0
+				response := "data: upstream event\n\n\x00\xff"
+				b.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+					calls++
+					if r.Method != tc.method || r.URL.String() != base+tc.suffix || (r.Host != "" && r.Host != r.URL.Host) {
+						t.Fatal("wrong upstream request:", r.Method, r.URL, r.Host)
+					}
+					var raw []byte
+					if r.Body != nil {
+						var err error
+						raw, err = io.ReadAll(r.Body)
+						if err != nil {
+							t.Fatal(err)
+						}
+					}
+					if string(raw) != tc.body || r.ContentLength != int64(len(tc.body)) {
+						t.Fatal("changed request body or length:", r.ContentLength)
+					}
+					for key, want := range map[string]string{
+						"Authorization": "Bearer openai-secret", "ChatGPT-Account-ID": account,
+						"Content-Type": tc.contentType, "Content-Encoding": tc.encoding, "X-Request-ID": "request-id",
+						"X-Codex-Bridge-Token": "", "Cookie": "", "Connection": "", "X-Hop": "",
+					} {
+						if r.Header.Get(key) != want {
+							t.Fatalf("incorrect upstream header %s: %q", key, r.Header.Get(key))
+						}
+					}
+					return &http.Response{StatusCode: tc.status, Header: http.Header{
+						"Content-Type": {"text/event-stream"}, "X-Request-Id": {"upstream-id"}, "Retry-After": {"7"}, "Location": {"https://other.example/redirect"},
+					}, Body: io.NopCloser(strings.NewReader(response))}, nil
+				})
+				r := httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+				r.Header.Set("X-Codex-Bridge-Token", "local-secret")
+				r.Header.Set("Authorization", "Bearer openai-secret")
+				r.Header.Set("ChatGPT-Account-ID", account)
+				r.Header.Set("Content-Type", tc.contentType)
+				r.Header.Set("Content-Encoding", tc.encoding)
+				r.Header.Set("X-Request-ID", "request-id")
+				r.Header.Set("Cookie", "private=cookie")
+				r.Header.Set("Connection", "X-Hop")
+				r.Header.Set("X-Hop", "private")
+				w := httptest.NewRecorder()
+				b.ServeHTTP(w, r)
+				if calls != 1 || w.Code != tc.status || w.Body.String() != response || !w.Flushed {
+					t.Fatal("changed upstream response:", calls, w.Code, w.Body.String(), w.Flushed)
+				}
+				for key, want := range map[string]string{"Content-Type": "text/event-stream", "X-Request-ID": "upstream-id", "Retry-After": "7", "Location": "https://other.example/redirect"} {
+					if w.Header().Get(key) != want {
+						t.Fatalf("changed response header %s: %q", key, w.Header().Get(key))
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestUnknownEndpointsRequireAuthentication(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("models: []\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	b := newBridge(path, "local-secret")
+	b.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		t.Fatal("unauthorized upstream request:", r.URL)
+		return nil, nil
+	})
+	for _, tc := range []struct {
+		token, auth, origin string
+		status              int
+	}{
+		{"", "Bearer secret", "", 401},
+		{"wrong", "Bearer secret", "", 401},
+		{"local-secret", "", "", 401},
+		{"local-secret", "Bearer secret", "https://browser.example", 403},
+	} {
+		r := httptest.NewRequest("POST", "/v1/images/generations", strings.NewReader(`{}`))
+		r.Header.Set("X-Codex-Bridge-Token", tc.token)
+		r.Header.Set("Authorization", tc.auth)
+		r.Header.Set("Origin", tc.origin)
+		w := httptest.NewRecorder()
+		b.ServeHTTP(w, r)
+		if w.Code != tc.status {
+			t.Fatal(w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestNativeHostedToolsPassThrough(t *testing.T) {
+	mockBundledCatalog(t, `{"models":[{"slug":"builtin"}]}`)
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("models: []\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	const request = `{"model":"builtin","stream":true,"tools":[{"type":"web_search","search_context_size":"high"},{"type":"image_generation","size":"1024x1024"},{"type":"future_hosted_tool","option":true}],"tool_choice":"auto","input":[{"role":"user","content":"search and draw"},{"type":"web_search_call","id":"ws_1","status":"completed","action":{"type":"search","query":"test"}},{"type":"image_generation_call","id":"ig_1","status":"completed","result":"AA=="}]}`
+	const response = "event: response.web_search_call.completed\ndata: {\"item_id\":\"ws_1\"}\n\nevent: response.image_generation_call.completed\ndata: {\"item_id\":\"ig_1\"}\n\n"
+	for _, account := range []string{"", "account"} {
+		b := newBridge(path, "local-secret")
+		calls := 0
+		b.client.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			calls++
+			raw, err := io.ReadAll(r.Body)
+			if err != nil || !sameJSON(decode(t, string(raw)), decode(t, request)) {
+				t.Fatal("changed native hosted tools or history:", err, string(raw))
+			}
+			return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"text/event-stream"}}, Body: io.NopCloser(strings.NewReader(response))}, nil
+		})
+		r := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(request))
+		r.Header.Set("X-Codex-Bridge-Token", "local-secret")
+		r.Header.Set("Authorization", "Bearer openai-secret")
+		r.Header.Set("ChatGPT-Account-ID", account)
+		w := httptest.NewRecorder()
+		b.ServeHTTP(w, r)
+		if calls != 1 || w.Code != 200 || w.Body.String() != response || !w.Flushed {
+			t.Fatal("changed hosted tool events:", calls, w.Code, w.Body.String())
+		}
+	}
+}
+
 func TestConfigEditPreservesUnrelatedSettings(t *testing.T) {
 	original := []byte("# user comment\nmodel_provider = '''original''' # trailing\nmodel_catalog_json = \"/tmp/models\"\nmodel = \"gpt-5.5\"\n[projects.\"/tmp/x\"]\ntrust_level = \"trusted\"\n")
 	got, values, err := removeRootStrings(original, map[string]bool{"model_provider": true, "model_catalog_json": true})
@@ -490,6 +644,7 @@ func TestConfigValidation(t *testing.T) {
 		`models: [{name: x, base_url: "https://user:pass@example.com", api: chat}]`,
 		`models: [{name: x, base_url: "https://example.com/v1", api: chat, params: {stream: false}}]`,
 		`models: [{name: x, base_url: "https://example.com/v1", api: chat, typo: true}]`,
+		`models: [{name: x, base_url: "https://example.com/v1", api: chat, unknown_endpoints: typo}]`,
 		"listen: 127.0.0.1:8787\nlisten: 127.0.0.1:8788\n",
 		"listen: 127.0.0.1:8787\n---\nmodels: []\n",
 		`models: [{name: x, base_url: "https://example.com/v1", api: chat, params: {vendor: {1: invalid}}}]`,
@@ -506,7 +661,7 @@ func TestConfigValidation(t *testing.T) {
 func TestYAMLAndLegacyConfigPreserveValues(t *testing.T) {
 	dir := t.TempDir()
 	legacy := filepath.Join(dir, "config.toml")
-	data := "listen='127.0.0.1:8787'\n[[models]]\nname='custom'\napi='chat'\nbase_url='https://example.com/v1'\napi_key='private-key'\n[models.params]\ntemperature=0.2\nlabels=['on','off']\n[models.params.vendor]\nthinking=false\n"
+	data := "listen='127.0.0.1:8787'\n[[models]]\nname='custom'\napi='chat'\nunknown_endpoints='native'\nbase_url='https://example.com/v1'\napi_key='private-key'\n[models.params]\ntemperature=0.2\nlabels=['on','off']\n[models.params.vendor]\nthinking=false\n"
 	if err := os.WriteFile(legacy, []byte(data), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -654,6 +809,7 @@ func TestSyncIdempotentAndUnsyncPreservesUserEdits(t *testing.T) {
 	changed = c
 	changed.Models = append([]Model(nil), c.Models...)
 	changed.Models[0].APIKey = "new-key"
+	changed.Models[0].UnknownEndpoints = "native"
 	changed.Models[0].Params = object{"temperature": 0.5}
 	if reason := diskSyncReason(t, configPath, changed); reason != "" {
 		t.Fatal("hot-loaded settings should not require sync:", reason)

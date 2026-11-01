@@ -30,6 +30,7 @@ type Model struct {
 	Model            string   `toml:"model" yaml:"model,omitempty"`
 	BaseURL          string   `toml:"base_url" yaml:"base_url"`
 	API              string   `toml:"api" yaml:"api"`
+	UnknownEndpoints string   `toml:"unknown_endpoints" yaml:"unknown_endpoints,omitempty"`
 	APIKey           string   `toml:"api_key" yaml:"api_key,omitempty"`
 	APIKeyEnv        string   `toml:"api_key_env" yaml:"api_key_env,omitempty"`
 	Params           object   `toml:"params" yaml:"params,omitempty"`
@@ -108,6 +109,12 @@ func loadConfig(path string) (Config, error) {
 		}
 		if m.API != "chat" && m.API != "responses" {
 			return c, fmt.Errorf("model %s: api must be chat or responses", m.Name)
+		}
+		if m.UnknownEndpoints == "" {
+			m.UnknownEndpoints = "auto"
+		}
+		if m.UnknownEndpoints != "auto" && m.UnknownEndpoints != "native" && m.UnknownEndpoints != "openai" {
+			return c, fmt.Errorf("model %s: unknown_endpoints must be auto, native, or openai", m.Name)
 		}
 		u, e := url.Parse(m.BaseURL)
 		if e != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil || u.Fragment != "" {

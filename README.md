@@ -24,40 +24,18 @@ codex
 
 ## Install
 
-### Linux
-
-**x86_64 / amd64**
+Linux and macOS, on amd64 or arm64:
 
 ```sh
-curl -fL https://github.com/agent0ai/codex-bridge/releases/latest/download/codex-bridge-linux-amd64 -o codex-bridge-linux-amd64 &&
-mkdir -p "$HOME/.local/bin" &&
-install -m 755 codex-bridge-linux-amd64 "$HOME/.local/bin/codex-bridge"
+curl -fsSL https://raw.githubusercontent.com/agent0ai/codex-bridge/main/install.sh | sh
 ```
 
-**ARM64 / aarch64**
+The installer detects your OS and architecture and installs the latest release to `~/.local/bin/codex-bridge`. It requires `curl` and a POSIX shell; no Go installation is needed.
+
+To update an installed bridge and restart its proxy immediately:
 
 ```sh
-curl -fL https://github.com/agent0ai/codex-bridge/releases/latest/download/codex-bridge-linux-arm64 -o codex-bridge-linux-arm64 &&
-mkdir -p "$HOME/.local/bin" &&
-install -m 755 codex-bridge-linux-arm64 "$HOME/.local/bin/codex-bridge"
-```
-
-### macOS
-
-**Apple Silicon / arm64**
-
-```sh
-curl -fL https://github.com/agent0ai/codex-bridge/releases/latest/download/codex-bridge-darwin-arm64 -o codex-bridge-darwin-arm64 &&
-mkdir -p "$HOME/.local/bin" &&
-install -m 755 codex-bridge-darwin-arm64 "$HOME/.local/bin/codex-bridge"
-```
-
-**Intel / amd64**
-
-```sh
-curl -fL https://github.com/agent0ai/codex-bridge/releases/latest/download/codex-bridge-darwin-amd64 -o codex-bridge-darwin-amd64 &&
-mkdir -p "$HOME/.local/bin" &&
-install -m 755 codex-bridge-darwin-amd64 "$HOME/.local/bin/codex-bridge"
+codex-bridge update
 ```
 
 ### PATH

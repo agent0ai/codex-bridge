@@ -86,7 +86,7 @@ func (b *bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.URL.Path != "/v1/responses" && r.URL.Path != "/v1/responses/compact" {
-		apiError(w, 404, "unknown bridge endpoint")
+		b.unknownEndpoint(w, r)
 		return
 	}
 	if r.Method != "POST" {
@@ -141,7 +141,9 @@ func (b *bridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			apiError(w, 500, "could not encode subscription request")
 			return
 		}
-		b.subscription(w, r, data)
+		r.Body = io.NopCloser(bytes.NewReader(data))
+		r.ContentLength = int64(len(data))
+		b.passthrough(w, r, nil)
 		return
 	}
 	if r.URL.Path != "/v1/responses" && route.API == "chat" {
@@ -245,8 +247,11 @@ func copyStream(w http.ResponseWriter, r io.Reader) error {
 	}
 }
 
-func (b *bridge) subscription(w http.ResponseWriter, r *http.Request, data []byte) {
-	if r.Header.Get("Authorization") == "" {
+func (b *bridge) passthrough(w http.ResponseWriter, r *http.Request, route *Model) {
+	if route != nil && route.UnknownEndpoints == "openai" {
+		route = nil
+	}
+	if route == nil && r.Header.Get("Authorization") == "" {
 		apiError(w, 401, "run codex login to use subscription models")
 		return
 	}
@@ -255,23 +260,72 @@ func (b *bridge) subscription(w http.ResponseWriter, r *http.Request, data []byt
 		base = "https://chatgpt.com/backend-api/codex"
 	}
 	target, _ := url.Parse(base)
-	// Only this fixed OpenAI destination receives the incoming Codex credentials.
+	var key string
+	if route != nil {
+		var err error
+		key, err = route.key()
+		if err != nil {
+			apiError(w, 503, err.Error())
+			return
+		}
+	}
+	var fallback *http.Request
 	proxy := httputil.ReverseProxy{Rewrite: func(pr *httputil.ProxyRequest) {
+		if pr.Out.URL.Path == "/v1" || strings.HasPrefix(pr.Out.URL.Path, "/v1/") {
+			pr.Out.URL.Path = strings.TrimPrefix(pr.Out.URL.Path, "/v1")
+			pr.Out.URL.RawPath = strings.TrimPrefix(pr.Out.URL.RawPath, "/v1")
+		}
 		pr.SetURL(target)
-		pr.Out.URL.Path = target.Path + strings.TrimPrefix(r.URL.Path, "/v1")
+		pr.Out.URL.RawQuery = pr.In.URL.RawQuery
 		pr.Out.Header.Del("X-Codex-Bridge-Token")
 		pr.Out.Header.Del("Cookie")
-	}, Transport: b.client.Transport, FlushInterval: -1, ModifyResponse: func(resp *http.Response) error {
+		if route != nil {
+			fallback = pr.Out.Clone(pr.Out.Context())
+			native, _ := url.Parse(route.BaseURL)
+			// Config also accepts a complete text endpoint; auxiliary paths are siblings.
+			for _, suffix := range []string{"/chat/completions", "/responses"} {
+				native.Path = strings.TrimSuffix(native.Path, suffix)
+				native.RawPath = strings.TrimSuffix(native.RawPath, suffix)
+			}
+			pr.Out.URL.Path = strings.TrimPrefix(pr.Out.URL.Path, target.Path)
+			pr.Out.URL.RawPath = strings.TrimPrefix(pr.Out.URL.RawPath, target.EscapedPath())
+			pr.SetURL(native)
+			// Only request metadata, never Codex credentials, goes to a third party.
+			pr.Out.Header = make(http.Header)
+			for _, name := range []string{"Content-Type", "Content-Encoding", "Accept", "Accept-Encoding", "User-Agent", "Range", "Idempotency-Key"} {
+				pr.Out.Header[name] = fallback.Header.Values(name)
+			}
+			if key != "" {
+				pr.Out.Header.Set("Authorization", "Bearer "+key)
+			}
+		}
+	}, Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		first, err := b.client.Transport.RoundTrip(req)
+		if route == nil || route.UnknownEndpoints != "auto" || (err == nil && first.StatusCode == http.StatusOK) ||
+			req.Context().Err() != nil || fallback.URL.String() == req.URL.String() || fallback.Header.Get("Authorization") == "" {
+			return first, err
+		}
+		fallback.Body, _ = r.GetBody()
+		second, fallbackErr := b.client.Transport.RoundTrip(fallback)
+		if fallbackErr == nil && second.StatusCode == http.StatusOK {
+			if first != nil {
+				first.Body.Close()
+			}
+			return second, nil
+		}
+		if second != nil {
+			second.Body.Close()
+		}
+		return first, err
+	}), FlushInterval: -1, ModifyResponse: func(resp *http.Response) error {
 		if resp.StatusCode >= 300 {
 			b.invalidateModels()
 		}
 		return nil
 	}, ErrorHandler: func(w http.ResponseWriter, _ *http.Request, _ error) {
 		b.invalidateModels()
-		apiError(w, 502, "OpenAI connection failed")
+		apiError(w, 502, "upstream connection failed")
 	}}
-	r.Body = io.NopCloser(bytes.NewReader(data))
-	r.ContentLength = int64(len(data))
 	proxy.ServeHTTP(w, r)
 }
 

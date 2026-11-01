@@ -5,6 +5,7 @@ models:
     model: deepseek-v4-1-flash
     base_url: https://llm.agent-zero.ai/v1
     api: chat
+    unknown_endpoints: auto # native provider first, then OpenAI on non-200
     context_window: 1048576
     vision: false
     # Replace the key below, or comment it out and uncomment api_key_env.

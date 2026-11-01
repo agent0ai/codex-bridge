@@ -31,7 +31,15 @@ Routing and body parameter changes are loaded on the next request. The bridge ca
 
 ## Install on your own machine
 
-Install Codex CLI 0.164.0 and Go 1.24.4 or newer, then run in a source checkout on Linux or macOS (see the [README](../README.md) for downloads and cloning):
+Install Codex CLI 0.164.0, then install the latest bridge release on Linux or macOS:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/agent0ai/codex-bridge/main/install.sh | sh
+```
+
+The installer detects amd64/arm64 and installs to `~/.local/bin/codex-bridge`. To choose another binary path, append it using `sh -s -- /path/to/codex-bridge`. Downloads are staged beside the destination, checked with `--version`, then renamed into place; a failed download leaves the existing binary intact.
+
+Alternatively, with Go 1.24.4 or newer, build in a source checkout:
 
 ```bash
 go build -trimpath -ldflags="-s -w -X main.version=$(git describe --tags --always --dirty)" -o codex-bridge . &&
@@ -78,6 +86,7 @@ models:
     model: actual-provider-model-id      # defaults to name
     base_url: https://provider.example/v1
     api: chat                            # chat or responses
+    unknown_endpoints: auto               # auto (default), native, or openai
     api_key_env: MY_PROVIDER_KEY          # or api_key: "literal key"
     context_window: 131072                # defaults to 32768
     vision: false                        # true for image-capable models
@@ -105,6 +114,7 @@ Changing `context_window` does not enlarge the provider's real context limit. Se
 | `start` | Start one background proxy; repeated starts reuse the running instance. |
 | `stop` | Stop the listener and allow active requests up to ten seconds to finish. |
 | `restart` | Gracefully stop the proxy, then start with the current config and environment; also starts a stopped proxy. |
+| `update` | Run the repository's installer to replace the current executable with the latest release, then restart the proxy using the new binary and the same config. |
 | `status` | Show proxy health, configured model count, and whether Codex's provider/catalog match the bridge. |
 | `serve` | Run in the foreground; stop with Ctrl-C. |
 | `unsync` | Restore the prior provider/catalog settings while preserving unrelated config changes. |
@@ -112,6 +122,10 @@ Changing `context_window` does not enlarge the provider's real context limit. Se
 `sync` writes `$CODEX_HOME/config.toml` and `codex-bridge-models.json` (normally under `~/.codex`). It preserves unrelated settings and comments, creates `config.toml.bridge-backup`, and is idempotent. It refuses to overwrite an existing unmanaged `codex-bridge` provider or a separate custom model catalog. Profiles are never created. Model aliases must not collide with built-in model names.
 
 After updating Codex, run `sync` to refresh the picker catalog. The bridge refreshes its model-ID cache on a missing model or after a native upstream error, but Codex's picker still needs to load the synced file. `restart` restarts only the bridge proxy; `sync --force` restarts Codex's shared server. Invalid config or missing environment-based API keys abort `restart` before stopping a working proxy.
+
+`codex-bridge update` downloads `install.sh` from this repository's `main` branch and executes it only after the script download succeeds. It updates the executable you invoked, including custom install paths, and honors `--config`. Config and environment-based provider keys are validated before updating. The proxy restarts with your current shell environment and the existing ten-second graceful shutdown limit; longer active requests may be interrupted. A failed installer leaves the running proxy alone; if installation succeeds but restart fails, the command reports that the binary was updated. This command does not restart Codex's shared server or change its configuration.
+
+Future compatibility migrations belong in `install.sh`: every install and update downloads a fresh copy, so migration logic can ship with future releases without requiring it in the already-installed binary. Keep migrations safe to rerun and preserve users' existing configuration and credentials. The script comes from `main` and installs the latest published release, so its migrations must remain compatible with that release.
 
 Codex 0.164.0 can reconnect new terminals to an existing shared background server. That server keeps its startup model catalog, so **closing and reopening the terminal does not refresh it**. Use `codex --no-daemon` to load the synced files immediately, or run `codex-bridge sync --force` and reopen Codex. The force option restarts the shared server through Codex's own daemon command, which may interrupt active work and takes time to shut down gracefully. Normal `sync` never restarts it. If restarting fails, the command exits with an error and clearly reports that the files were still synced.
 
@@ -142,6 +156,20 @@ The proxy binds only to a loopback IP and requires a random local token written 
 ## Translation and limits
 
 Supported: streamed text, multiple tool calls, tool results and multi-turn history, namespaced tools, custom/freeform tools (including `apply_patch`), reasoning summaries and replay, image URLs/data URLs, inline file data, structured-output schemas, usage counts, token-limit endings, upstream errors, cancellation, and native Responses forwarding. Summary-only reasoning is converted to text when crossing into Responses so OpenAI does not attempt to retrieve invented server-side item IDs.
+
+Endpoints other than `/v1/responses`, `/v1/responses/compact`, and the local health/stop controls use the model's `unknown_endpoints` setting:
+
+| Value | Destination |
+| --- | --- |
+| `native` | The model's configured `base_url`, using its provider credentials. |
+| `openai` | OpenAI, using Codex's existing authentication. |
+| `auto` (default) | Try native first. On a non-200 response or connection failure, try OpenAI if its endpoint differs and OpenAI credentials are available. Return the OpenAI response only if it is HTTP 200; otherwise return the first response/error. |
+
+The model is identified by a `model` field in an uncompressed JSON or multipart body, or a `model` query parameter. A configured model name takes precedence; otherwise, an upstream model ID can select an entry if it is unique. Ambiguous IDs are rejected. Unconfigured models and requests without a model use the same OpenAI destination as native text requests, so there is no duplicate fallback call. OpenAI means `https://chatgpt.com/backend-api/codex` with `ChatGPT-Account-ID`, or `https://api.openai.com/v1` for API-key requests. The bridge maps its `/v1` prefix to the destination base; a configured base ending in `/responses` or `/chat/completions` uses sibling paths for auxiliary endpoints.
+
+Auxiliary bodies, including their model IDs and multipart contents, pass through unchanged; no Chat Completions translation or parameter overrides apply. Requests are buffered up to 32 MiB to identify the model and replay the body. Compressed bodies remain unchanged and can select a configured model through the query parameter. Provider calls forward standard request metadata and only the configured provider credential; the local bridge token, cookies, and subscription credentials are never sent to a third party. Selected response statuses, headers, and streams are preserved. No output from a discarded attempt reaches the client. Because `auto` retries every status other than 200, including 201/202, it can repeat operations that have side effects; use `native` to disable fallback for those endpoints.
+
+Native Responses requests retain hosted tool definitions, including web search and image generation. Support still depends on the upstream endpoint and account. If an older bridge returns `unknown bridge endpoint`, update its binary and run `codex-bridge restart`.
 
 Codex Responses Lite can retain `additional_tools` catalog items in compacted history. When switching to a Chat Completions model, the bridge uses the request's current top-level `tools` array and skips these historical catalogs, preserving tool calls and results without re-enabling old tools or overwriting current schemas. A missing current tool array is rejected; external models generated by `sync` already have `use_responses_lite: false`. Native Responses requests retain their catalog items. If an older bridge reports `cannot translate Responses input type "additional_tools"`, update the bridge binary and run `codex-bridge restart`, then retry the existing thread; no history deletion or Codex server restart is needed.
 
@@ -209,7 +237,7 @@ No ports need publishing: Codex and the proxy share the container's loopback int
 
 The [build/release workflow](../.github/workflows/release.yml) verifies branch pushes without publishing. A stable `vMAJOR.MINOR.PATCH` tag additionally publishes a release after all four native Linux/macOS amd64/arm64 jobs pass tests and build binaries with CGO disabled. The Mac jobs also run the isolated lifecycle and real Codex picker regression. The prepared release assets are `codex-bridge-linux-amd64`, `codex-bridge-linux-arm64`, `codex-bridge-darwin-amd64` (Intel), `codex-bridge-darwin-arm64` (Apple Silicon), `checksums.txt` covering all four, the MIT license, and third-party notices.
 
-Release notes include commits since the previous stable tag. Assets are uploaded to a draft before publication; retries can complete a draft but cannot overwrite a published release. Older version tags do not replace the latest release used by the README's download links. The workflow uses GitHub's job token and needs no custom release secrets. Mac binaries have not yet been published; use the README's source build until a release containing those assets exists.
+Release notes include commits since the previous stable tag. Assets are uploaded to a draft before publication; retries can complete a draft but cannot overwrite a published release. Older version tags do not replace the latest release used by the README's download links. The workflow uses GitHub's job token and needs no custom release secrets.
 
 ## Live provider checks
 
