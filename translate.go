@@ -205,6 +205,11 @@ func toChat(req object) (object, toolMap, error) {
 		item := obj(raw)
 		kind := str(item["type"])
 		switch kind {
+		case "additional_tools":
+			// Responses Lite catalogs survive model switches; only req.tools describes current tools.
+			if _, ok := req["tools"].([]any); !ok {
+				return nil, nil, fmt.Errorf("additional_tools history requires a current top-level tools array; disable Responses Lite for Chat Completions models")
+			}
 		case "message", "":
 			role := str(item["role"])
 			if role == "developer" {

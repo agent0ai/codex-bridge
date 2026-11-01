@@ -196,6 +196,41 @@ func TestConversationTranslation(t *testing.T) {
 	}
 }
 
+func TestAdditionalToolsHistory(t *testing.T) {
+	req := decode(t, `{"model":"alias","tools":[{"type":"namespace","name":"functions","tools":[{"type":"function","name":"exec_command","description":"Current shell tool","parameters":{"type":"object"}},{"type":"custom","name":"apply_patch"}]}],"input":[{"role":"user","content":"continue"},{"type":"custom_tool_call","namespace":"functions","name":"exec","call_id":"old","input":"text(await tools.exec_command({cmd: 'pwd'}))"},{"type":"custom_tool_call_output","call_id":"old","output":"/workspace"},{"type":"function_call","namespace":"functions","name":"exec_command","call_id":"current","arguments":"{}"},{"type":"function_call_output","call_id":"current","output":"done"}]}`)
+	oldCatalog := decode(t, `{"type":"additional_tools","id":"at_saved","role":"developer","tools":[{"type":"namespace","name":"functions","tools":[{"type":"custom","name":"exec"},{"type":"function","name":"exec_command","description":"Old schema","parameters":{"type":"object","required":["old"]}}]},{"type":"web_search"}]}`)
+	for _, empty := range []bool{false, true} {
+		t.Run(fmt.Sprintf("empty-current-tools=%t", empty), func(t *testing.T) {
+			current := object{"model": req["model"], "tools": req["tools"], "input": req["input"]}
+			if empty {
+				current["tools"] = []any{}
+			}
+			want, wantNames, err := toChat(current)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Catalog snapshots can appear at the prefix or between calls and results.
+			input := []any{oldCatalog}
+			for _, item := range arr(req["input"]) {
+				input = append(input, item, oldCatalog)
+			}
+			current["input"] = input
+			before, _ := json.Marshal(current)
+			got, names, err := toChat(current)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !sameJSON(got, want) || !sameJSON(names, wantNames) {
+				t.Fatal("historical catalogs changed current tools or conversation replay")
+			}
+			after, _ := json.Marshal(current)
+			if !bytes.Equal(before, after) {
+				t.Fatal("translation mutated the saved history")
+			}
+		})
+	}
+}
+
 func TestRejectLossyInputs(t *testing.T) {
 	for _, s := range []string{
 		`{"previous_response_id":"r","input":[]}`,
@@ -203,6 +238,10 @@ func TestRejectLossyInputs(t *testing.T) {
 		`{"input":[{"type":"function_call","name":"x","call_id":"c","arguments":"{}"}]}`,
 		`{"input":[{"role":"user","content":[{"type":"input_file","file_id":"file"}]}]}`,
 		`{"tools":[{"type":"computer_use"}]}`,
+		`{"input":[{"type":"additional_tools","tools":[{"type":"function","name":"read"}]}]}`,
+		`{"tools":null,"input":[{"type":"additional_tools","tools":[]}]}`,
+		`{"tools":{},"input":[{"type":"additional_tools","tools":[]}]}`,
+		`{"tools":[],"input":[{"type":"unknown_future_item"}]}`,
 	} {
 		if _, _, err := toChat(decode(t, s)); err == nil {
 			t.Fatalf("accepted %s", s)
@@ -343,15 +382,21 @@ models:
 			if body["model"] != "remote-id" || body["temperature"] != 0.25 || obj(body["vendor"])["thinking"] != false {
 				t.Fatal(body)
 			}
+			if body["tools"] != nil || !sameJSON(body["messages"], []any{object{"role": "user", "content": "hi"}}) {
+				t.Fatal("historical tools leaked into the Chat request")
+			}
 		} else {
 			if r.URL.String() != "https://chatgpt.com/backend-api/codex/responses" || r.Header.Get("Authorization") != "Bearer subscription-secret" || r.Header.Get("ChatGPT-Account-ID") != "account" || r.Header.Get("X-Codex-Bridge-Token") != "" {
 				t.Fatalf("wrong subscription route: %v %v", r.URL, r.Header)
+			}
+			if obj(arr(decode(t, string(raw))["input"])[0])["type"] != "additional_tools" {
+				t.Fatal("subscription request lost its Responses Lite catalog")
 			}
 		}
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"choices":[{"message":{"content":"OK"},"finish_reason":"stop"}]}`))}, nil
 	})
 	for _, model := range []string{"custom", "builtin"} {
-		req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"`+model+`","input":"hi"}`))
+		req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"`+model+`","tools":[],"input":[{"type":"additional_tools","role":"developer","tools":[{"type":"custom","name":"exec"}]},{"role":"user","content":"hi"}]}`))
 		req.Header.Set("X-Codex-Bridge-Token", "local-secret")
 		req.Header.Set("Authorization", "Bearer subscription-secret")
 		req.Header.Set("ChatGPT-Account-ID", "account")
