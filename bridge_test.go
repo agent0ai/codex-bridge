@@ -231,6 +231,37 @@ func TestAdditionalToolsHistory(t *testing.T) {
 	}
 }
 
+func TestToolOptionsWithoutCallableTools(t *testing.T) {
+	for _, definitions := range []string{`null`, `[]`, `[{"type":"web_search"}]`} {
+		for _, choice := range []string{"auto", "none"} {
+			req := decode(t, `{"input":"summarize","tools":`+definitions+`,"tool_choice":"`+choice+`","parallel_tool_calls":false}`)
+			chat, _, err := toChat(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, key := range []string{"tools", "tool_choice", "parallel_tool_calls"} {
+				if _, ok := chat[key]; ok {
+					t.Fatalf("forwarded %s without callable tools: %v", key, chat)
+				}
+			}
+		}
+	}
+	for _, choice := range []string{`"auto"`, `"none"`, `"required"`, `{"type":"custom","namespace":"functions","name":"apply_patch"}`} {
+		req := decode(t, `{"input":"edit","tools":[{"type":"namespace","name":"functions","tools":[{"type":"custom","name":"apply_patch"}]}],"tool_choice":`+choice+`,"parallel_tool_calls":false}`)
+		chat, _, err := toChat(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := req["tool_choice"]
+		if obj(want) != nil {
+			want = object{"type": "function", "function": object{"name": toolName("functions", "apply_patch")}}
+		}
+		if len(arr(chat["tools"])) != 1 || !sameJSON(chat["tool_choice"], want) || chat["parallel_tool_calls"] != false {
+			t.Fatal("lost tool options for a callable tool:", chat)
+		}
+	}
+}
+
 func TestRejectLossyInputs(t *testing.T) {
 	for _, s := range []string{
 		`{"previous_response_id":"r","input":[]}`,
@@ -242,6 +273,9 @@ func TestRejectLossyInputs(t *testing.T) {
 		`{"tools":null,"input":[{"type":"additional_tools","tools":[]}]}`,
 		`{"tools":{},"input":[{"type":"additional_tools","tools":[]}]}`,
 		`{"tools":[],"input":[{"type":"unknown_future_item"}]}`,
+		`{"input":"hi","tools":[],"tool_choice":"required"}`,
+		`{"input":"hi","tools":[],"tool_choice":{"type":"function","name":"read"}}`,
+		`{"input":"hi","tools":[{"type":"web_search"}],"tool_choice":"required"}`,
 	} {
 		if _, _, err := toChat(decode(t, s)); err == nil {
 			t.Fatalf("accepted %s", s)
@@ -385,6 +419,12 @@ models:
 			if body["tools"] != nil || !sameJSON(body["messages"], []any{object{"role": "user", "content": "hi"}}) {
 				t.Fatal("historical tools leaked into the Chat request")
 			}
+			if _, ok := body["tool_choice"]; ok {
+				t.Fatal("provider rejects tool_choice without tools")
+			}
+			if _, ok := body["parallel_tool_calls"]; ok {
+				t.Fatal("provider rejects parallel_tool_calls without tools")
+			}
 		} else {
 			if r.URL.String() != "https://chatgpt.com/backend-api/codex/responses" || r.Header.Get("Authorization") != "Bearer subscription-secret" || r.Header.Get("ChatGPT-Account-ID") != "account" || r.Header.Get("X-Codex-Bridge-Token") != "" {
 				t.Fatalf("wrong subscription route: %v %v", r.URL, r.Header)
@@ -396,7 +436,7 @@ models:
 		return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"choices":[{"message":{"content":"OK"},"finish_reason":"stop"}]}`))}, nil
 	})
 	for _, model := range []string{"custom", "builtin"} {
-		req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"`+model+`","tools":[],"input":[{"type":"additional_tools","role":"developer","tools":[{"type":"custom","name":"exec"}]},{"role":"user","content":"hi"}]}`))
+		req := httptest.NewRequest("POST", "/v1/responses", strings.NewReader(`{"model":"`+model+`","tools":[],"tool_choice":"auto","parallel_tool_calls":false,"input":[{"type":"additional_tools","role":"developer","tools":[{"type":"custom","name":"exec"}]},{"role":"user","content":"hi"}]}`))
 		req.Header.Set("X-Codex-Bridge-Token", "local-secret")
 		req.Header.Set("Authorization", "Bearer subscription-secret")
 		req.Header.Set("ChatGPT-Account-ID", "account")

@@ -302,8 +302,11 @@ func toChat(req object) (object, toolMap, error) {
 	out := object{"model": req["model"], "messages": messages, "stream": true, "stream_options": object{"include_usage": true}}
 	if len(tools) > 0 {
 		out["tools"] = tools
+		if v, ok := req["parallel_tool_calls"]; ok {
+			out["parallel_tool_calls"] = v
+		}
 	}
-	for _, key := range []string{"temperature", "top_p", "parallel_tool_calls", "seed", "user", "prompt_cache_key", "prompt_cache_retention", "prompt_cache_options"} {
+	for _, key := range []string{"temperature", "top_p", "seed", "user", "prompt_cache_key", "prompt_cache_retention", "prompt_cache_options"} {
 		if v, ok := req[key]; ok {
 			out[key] = v
 		}
@@ -315,7 +318,12 @@ func toChat(req object) (object, toolMap, error) {
 		out["reasoning_effort"] = effort
 	}
 	if choice, ok := req["tool_choice"]; ok {
-		if s, ok := choice.(string); ok {
+		if len(tools) == 0 {
+			// Codex compaction sends auto with no tools; Chat defaults to none when tools are absent.
+			if choice != "auto" && choice != "none" {
+				return nil, nil, fmt.Errorf("tool_choice requires a callable tool, but no tools remain after Chat Completions translation")
+			}
+		} else if s, ok := choice.(string); ok {
 			out["tool_choice"] = s
 		} else {
 			c := obj(choice)
